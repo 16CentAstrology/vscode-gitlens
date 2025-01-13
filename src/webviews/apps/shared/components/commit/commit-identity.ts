@@ -1,78 +1,131 @@
-import { attr, css, customElement, FASTElement, html, when } from '@microsoft/fast-element';
+import { css, html, LitElement, nothing } from 'lit';
+import { customElement, property } from 'lit/decorators.js';
+import { when } from 'lit/directives/when.js';
+import { dateConverter } from '../converters/date-converter';
 import '../code-icon';
 import '../formatted-date';
+import '../overlays/tooltip';
 
-const template = html<CommitIdentity>`
-	<template>
-		<a class="avatar" href="${x => (x.email ? `mailto:${x.email}` : '#')}">
-			${when(
-				x => x.showAvatar,
-				html<CommitIdentity>`<img class="thumb" lazy src="${x => x.avatarUrl}" alt="${x => x.name}" />`,
-			)}
-			${when(x => !x.showAvatar, html<CommitIdentity>`<code-icon icon="person" size="32"></code-icon>`)}
-		</a>
-		<a class="name" href="${x => (x.email ? `mailto:${x.email}` : '#')}">${x => x.name}</a>
-		<span class="date"
-			>${x => x.actionLabel} <formatted-date date=${x => x.date} format="${x => x.dateFormat}"></formatted-date
-		></span>
-	</template>
-`;
+@customElement('commit-identity')
+export class CommitIdentity extends LitElement {
+	static override styles = css`
+		:host,
+		.author {
+			display: flex;
+			flex-direction: row;
+			align-items: center;
+			gap: 0 0.6rem;
+		}
 
-const styles = css`
-	:host {
-		display: grid;
-		gap: 0rem 1rem;
-		justify-content: start;
-	}
-	a {
-		color: var(--color-link-foreground);
-		text-decoration: none;
-	}
-	.avatar {
-		grid-column: 1;
-		grid-row: 1 / 3;
-		width: 36px;
-	}
-	.thumb {
-		width: 100%;
-		height: auto;
-		border-radius: 0.4rem;
-	}
-	.name {
-		grid-column: 2;
-		grid-row: 1;
-		font-size: 1.5rem;
-	}
-	.date {
-		grid-column: 2;
-		grid-row: 2;
-		font-size: 1.3rem;
-	}
-`;
+		a {
+			color: var(--color-link-foreground);
+			text-decoration: none;
+		}
 
-@customElement({ name: 'commit-identity', template: template, styles: styles })
-export class CommitIdentity extends FASTElement {
-	@attr({ mode: 'reflect' })
+		.author-hover {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			gap: 0.6rem;
+			margin: 0.6rem 0.2rem 0.2rem 0.2rem;
+		}
+
+		.author-hover img {
+			max-width: 64px;
+		}
+
+		.avatar {
+			width: 1.8rem;
+		}
+
+		.thumb {
+			width: 100%;
+			height: auto;
+			vertical-align: middle;
+			border-radius: 0.4rem;
+		}
+
+		.name {
+			flex: 1;
+			font-size: 1.3rem;
+			white-space: nowrap;
+			text-overflow: ellipsis;
+		}
+
+		.date {
+			flex: none;
+			margin-inline-start: auto;
+			font-size: 1.3rem;
+			color: var(--color-foreground--50);
+		}
+	`;
+
+	@property()
 	name = '';
 
-	@attr({ mode: 'reflect' })
-	email = '';
+	@property()
+	url?: string;
 
-	@attr({ mode: 'reflect' })
-	date = '';
+	@property({ converter: dateConverter(), reflect: true })
+	date: Date | undefined;
 
-	@attr({ mode: 'reflect' })
+	@property()
 	avatarUrl = 'https://www.gravatar.com/avatar/?s=64&d=robohash';
 
-	@attr({ mode: 'boolean' })
+	@property({ type: Boolean, attribute: 'show-avatar', reflect: true })
 	showAvatar = false;
 
-	@attr({ mode: 'reflect' })
+	@property()
 	dateFormat = 'MMMM Do, YYYY h:mma';
 
-	@attr({ mode: 'boolean' })
+	@property()
+	dateStyle: 'relative' | 'absolute' = 'relative';
+
+	@property({ type: Boolean })
 	committer = false;
 
-	@attr({ mode: 'reflect' })
-	actionLabel = 'committed';
+	@property()
+	actionLabel?: string;
+
+	private renderAvatar() {
+		if (this.showAvatar && this.avatarUrl?.length) {
+			return html`<img class="thumb" src="${this.avatarUrl}" alt="${this.name}" />`;
+		}
+		return html`<code-icon icon="person" size="18"></code-icon>`;
+	}
+
+	override render() {
+		return html`
+			<gl-tooltip>
+				${when(
+					this.url != null,
+					() =>
+						html`<a class="author" href="${this.url}"
+							><span class="avatar">${this.renderAvatar()}</span
+							><span class="name" href="${this.url}">${this.name}</span></a
+						>`,
+					() =>
+						html`<span class="author"
+							><span class="avatar">${this.renderAvatar()}</span
+							><span class="name" href="${this.url}">${this.name}</span></span
+						>`,
+				)}
+				<div class="author-hover" slot="content">
+					${this.avatarUrl?.length
+						? html`<img class="thumb" src="${this.avatarUrl}" alt="${this.name}" />`
+						: nothing}
+					<span>${this.name}</span>
+				</div>
+			</gl-tooltip>
+			<span class="date">
+				${this.actionLabel}
+				<formatted-date
+					.date=${this.date}
+					.format=${this.dateFormat}
+					.dateStyle=${this.dateStyle}
+				></formatted-date>
+			</span>
+		`;
+	}
 }
