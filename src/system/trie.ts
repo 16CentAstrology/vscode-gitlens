@@ -2,8 +2,6 @@ import type { Uri } from 'vscode';
 import { isLinux } from '@env/platform';
 import { filterMap } from './iterable';
 import { normalizePath as _normalizePath } from './path';
-// TODO@eamodio don't import from string here since it will break the tests because of ESM dependencies
-// import { CharCode } from './string';
 
 const slash = 47; //CharCode.Slash;
 
@@ -78,9 +76,9 @@ export class UriTrie<T> {
 		this.trie.clear();
 	}
 
-	delete(uri: Uri): boolean {
+	delete(uri: Uri, dispose: boolean = true): boolean {
 		const { path, ignoreCase } = this.normalize(uri);
-		return this.trie.delete(path, ignoreCase);
+		return this.trie.delete(path, ignoreCase, dispose);
 	}
 
 	get(uri: Uri): T | undefined {
@@ -390,7 +388,7 @@ export class PathTrie<T> {
 		this.root.children = undefined;
 	}
 
-	delete(path: string, ignoreCase?: boolean): boolean {
+	delete(path: string, ignoreCase?: boolean, dispose: boolean = true): boolean {
 		path = this.normalize(path);
 		ignoreCase = ignoreCase ?? !isLinux;
 
@@ -407,7 +405,11 @@ export class PathTrie<T> {
 
 		if (!node?.value) return false;
 
+		if (dispose) {
+			disposeValue(node.value);
+		}
 		node.value = undefined;
+
 		if ((node.children == null || node.children.size === 0) && parent?.children != null) {
 			parent.children.delete(ignoreCase ? node.path.toLowerCase() : node.path);
 			if (parent.children.size === 0) {
@@ -557,8 +559,17 @@ export class PathTrie<T> {
 		}
 
 		const added = node.value == null;
+		if (!added && node.value !== value) {
+			disposeValue(node.value);
+		}
 		node.value = value;
 		return added;
+	}
+}
+
+function disposeValue(obj: unknown): void {
+	if (obj != null && typeof obj === 'object' && 'dispose' in obj && typeof obj.dispose === 'function') {
+		obj.dispose();
 	}
 }
 

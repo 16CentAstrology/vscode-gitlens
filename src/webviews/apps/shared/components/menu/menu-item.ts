@@ -1,49 +1,85 @@
-import { attr, css, customElement, FASTElement, html } from '@microsoft/fast-element';
-import { elementBase } from '../styles/base';
+import type { PropertyValueMap } from 'lit';
+import { css, html, LitElement } from 'lit';
+import { customElement, property } from 'lit/decorators.js';
+import { elementBase } from '../styles/lit/base.css';
 
-const template = html<MenuItem>`
-	<template role="option" tabindex="${x => (x.disabled ? '-1' : '0')}" ?disabled="${x => x.disabled}">
-		<slot></slot>
-	</template>
-`;
+@customElement('menu-item')
+export class MenuItem extends LitElement {
+	static override styles = [
+		elementBase,
+		css`
+			:host {
+				display: block;
+				font-family: inherit;
+				border: none;
+				padding: 0 0.6rem;
+				cursor: pointer;
+				color: var(--vscode-menu-foreground);
+				background-color: var(--vscode-menu-background);
+				text-align: left;
+				height: auto;
+				line-height: 2.2rem;
+			}
 
-const styles = css`
-	${elementBase}
+			:host([role='option']:hover) {
+				color: var(--vscode-menu-selectionForeground);
+				background-color: var(--vscode-menu-selectionBackground);
+			}
 
-	:host {
-		font-family: inherit;
-		border: none;
-		padding: 0 0.6rem;
-		cursor: pointer;
-		color: var(--vscode-menu-foreground);
-		background-color: var(--vscode-menu-background);
-		text-align: left;
-		display: flex;
-		align-items: center;
-		height: auto;
-		line-height: 2.2rem;
-	}
+			:host([disabled]) {
+				pointer-events: none;
+				cursor: default;
+				opacity: 0.5;
+			}
 
-	:host(:hover) {
-		color: var(--vscode-menu-selectionForeground);
-		background-color: var(--vscode-menu-selectionBackground);
-	}
+			:host([aria-selected='true']) {
+				opacity: 1;
+				color: var(--vscode-menu-selectionForeground);
+				background-color: var(--vscode-menu-background);
+			}
 
-	:host([disabled]) {
-		pointer-events: none;
-		cursor: default;
-		opacity: 0.5;
-	}
+			:host([href]) {
+				padding-inline: 0;
+			}
 
-	:host([aria-selected='true']) {
-		opacity: 1;
-		color: var(--vscode-menu-selectionForeground);
-		background-color: var(--vscode-menu-background);
-	}
-`;
+			a {
+				display: block;
+				color: inherit;
+				text-decoration: none;
+				padding: 0 0.6rem;
+			}
+		`,
+	];
 
-@customElement({ name: 'menu-item', template: template, styles: styles })
-export class MenuItem extends FASTElement {
-	@attr({ mode: 'boolean' })
+	@property({ type: Boolean, reflect: true })
 	disabled = false;
+
+	@property({ reflect: true })
+	href?: string;
+
+	@property({ reflect: true })
+	override role = 'option';
+
+	updateInteractiveState(): void {
+		this.tabIndex = this.disabled ? -1 : this.role === 'option' ? 0 : -1;
+	}
+
+	protected override updated(changedProperties: PropertyValueMap<any> | Map<PropertyKey, unknown>): void {
+		if (changedProperties.has('disabled') || changedProperties.has('role')) {
+			this.updateInteractiveState();
+		}
+	}
+
+	override render(): unknown {
+		if (this.href) {
+			return html`<a href=${this.href}><slot></slot></a>`;
+		}
+		return html`<slot></slot>`;
+	}
+}
+
+declare global {
+	interface HTMLElementTagNameMap {
+		'menu-item': MenuItem;
+	}
 }

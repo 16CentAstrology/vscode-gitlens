@@ -10,6 +10,7 @@ export const enum RemoteResourceType {
 	File = 'file',
 	Repo = 'repo',
 	Revision = 'revision',
+	// Tag = 'tag',
 }
 
 export type RemoteResource =
@@ -58,26 +59,3 @@ export type RemoteResource =
 			range?: Range;
 			sha?: string;
 	  };
-
-export function getNameFromRemoteResource(resource: RemoteResource) {
-	switch (resource.type) {
-		case RemoteResourceType.Branch:
-			return 'Branch';
-		case RemoteResourceType.Branches:
-			return 'Branches';
-		case RemoteResourceType.Commit:
-			return 'Commit';
-		case RemoteResourceType.Comparison:
-			return 'Comparison';
-		case RemoteResourceType.CreatePullRequest:
-			return 'Create Pull Request';
-		case RemoteResourceType.File:
-			return 'File';
-		case RemoteResourceType.Repo:
-			return 'Repository';
-		case RemoteResourceType.Revision:
-			return 'File';
-		default:
-			return '';
-	}
-}

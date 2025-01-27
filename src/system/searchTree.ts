@@ -49,7 +49,10 @@ export class PathIterator implements IKeyIterator<string> {
 	private _from!: number;
 	private _to!: number;
 
-	constructor(private readonly _splitOnBackslash: boolean = true, private readonly _caseSensitive: boolean = true) {}
+	constructor(
+		private readonly _splitOnBackslash: boolean = true,
+		private readonly _caseSensitive: boolean = true,
+	) {}
 
 	reset(key: string): this {
 		this._value = key.replace(/\\$|\/$/, '');
@@ -201,11 +204,11 @@ export class TernarySearchTree<K, V> {
 	}
 
 	delete(key: K): void {
-		return this._delete(key, false);
+		this._delete(key, false);
 	}
 
 	deleteSuperstr(key: K): void {
-		return this._delete(key, true);
+		this._delete(key, true);
 	}
 
 	private _delete(key: K, superStr: boolean): void {
@@ -341,7 +344,7 @@ export class TernarySearchTree<K, V> {
 		return { next: next };
 	}
 
-	forEach(callback: (value: V, index: K) => any) {
+	forEach(callback: (value: V, index: K) => any): void {
 		this._forEach(this._root, callback);
 	}
 

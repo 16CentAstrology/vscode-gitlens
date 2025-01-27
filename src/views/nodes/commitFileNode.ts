@@ -1,45 +1,53 @@
 import type { Command, Selection } from 'vscode';
-import { MarkdownString, TreeItem, TreeItemCollapsibleState, Uri } from 'vscode';
-import type { DiffWithPreviousCommandArgs } from '../../commands';
-import { Commands } from '../../constants';
+import { TreeItem, TreeItemCollapsibleState, Uri } from 'vscode';
+import type { DiffWithPreviousCommandArgs } from '../../commands/diffWithPrevious';
+import { Schemes } from '../../constants';
+import { GlCommand } from '../../constants.commands';
+import type { TreeViewRefFileNodeTypes } from '../../constants.views';
 import { StatusFileFormatter } from '../../git/formatters/statusFormatter';
 import { GitUri } from '../../git/gitUri';
 import type { GitBranch } from '../../git/models/branch';
 import type { GitCommit } from '../../git/models/commit';
-import { GitFile } from '../../git/models/file';
+import type { GitFile } from '../../git/models/file';
 import type { GitRevisionReference } from '../../git/models/reference';
-import { joinPaths, relativeDir } from '../../system/path';
-import type { FileHistoryView } from '../fileHistoryView';
-import type { View, ViewsWithCommits } from '../viewBase';
-import type { ViewNode } from './viewNode';
-import { ContextValues, ViewRefFileNode } from './viewNode';
+import { getGitFileStatusIcon } from '../../git/utils/fileStatus.utils';
+import { relativeDir } from '../../system/-webview/path';
+import { joinPaths } from '../../system/path';
+import type { ViewsWithCommits, ViewsWithStashes } from '../viewBase';
+import { createViewDecorationUri } from '../viewDecorationProvider';
+import { getFileTooltipMarkdown } from './abstract/viewFileNode';
+import type { ViewNode } from './abstract/viewNode';
+import { ContextValues, getViewNodeId } from './abstract/viewNode';
+import { ViewRefFileNode } from './abstract/viewRefNode';
 
-export class CommitFileNode<TView extends View = ViewsWithCommits | FileHistoryView> extends ViewRefFileNode<TView> {
-	static key = ':file';
-	static getId(parent: ViewNode, path: string): string {
-		return `${parent.id}${this.key}(${path})`;
-	}
-
+export abstract class CommitFileNodeBase<
+	Type extends TreeViewRefFileNodeTypes,
+	TView extends ViewsWithCommits | ViewsWithStashes,
+> extends ViewRefFileNode<Type, TView> {
 	constructor(
+		type: Type,
 		view: TView,
 		parent: ViewNode,
 		file: GitFile,
 		public commit: GitCommit,
-		private readonly _options: {
+		private readonly options?: {
 			branch?: GitBranch;
 			selection?: Selection;
 			unpublished?: boolean;
-		} = {},
+		},
 	) {
-		super(GitUri.fromFile(file, commit.repoPath, commit.sha), view, parent, file);
+		super(type, GitUri.fromFile(file, commit.repoPath, commit.sha), view, parent, file);
+
+		this.updateContext({ commit: commit, file: file });
+		this._uniqueId = getViewNodeId(type, this.context);
+	}
+
+	override get id(): string {
+		return this._uniqueId;
 	}
 
 	override toClipboard(): string {
 		return this.file.path;
-	}
-
-	override get id(): string {
-		return CommitFileNode.getId(this.parent, this.file.path);
 	}
 
 	get priority(): number {
@@ -59,10 +67,9 @@ export class CommitFileNode<TView extends View = ViewsWithCommits | FileHistoryV
 			// Try to get the commit directly from the multi-file commit
 			const commit = await this.commit.getCommitForFile(this.file);
 			if (commit == null) {
-				const log = await this.view.container.git.getLogForFile(this.repoPath, this.file.path, {
-					limit: 2,
-					ref: this.commit.sha,
-				});
+				const log = await this.view.container.git
+					.commits(this.repoPath)
+					.getLogForFile(this.file.path, this.commit.sha, { limit: 2 });
 				if (log != null) {
 					this.commit = log.commits.get(this.commit.sha) ?? this.commit;
 				}
@@ -75,15 +82,28 @@ export class CommitFileNode<TView extends View = ViewsWithCommits | FileHistoryV
 		item.id = this.id;
 		item.contextValue = this.contextValue;
 		item.description = this.description;
-		item.resourceUri = Uri.parse(`gitlens-view://commit-file/status/${this.file.status}`);
-		item.tooltip = this.tooltip;
 
-		const icon = GitFile.getStatusIcon(this.file.status);
-		item.iconPath = {
-			dark: this.view.container.context.asAbsolutePath(joinPaths('images', 'dark', icon)),
-			light: this.view.container.context.asAbsolutePath(joinPaths('images', 'light', icon)),
-		};
-
+		if (this.view.config.files.icon === 'type') {
+			item.resourceUri = Uri.from({
+				scheme: Schemes.Git,
+				authority: 'gitlens-view',
+				path: this.uri.path,
+				query: JSON.stringify({
+					// Ensure we use the fsPath here, otherwise the url won't open properly
+					path: this.uri.fsPath,
+					ref: this.uri.sha,
+					decoration: createViewDecorationUri('commit-file', { status: this.file.status }).toString(),
+				}),
+			});
+		} else {
+			item.resourceUri = createViewDecorationUri('commit-file', { status: this.file.status });
+			const icon = getGitFileStatusIcon(this.file.status);
+			item.iconPath = {
+				dark: this.view.container.context.asAbsolutePath(joinPaths('images', 'dark', icon)),
+				light: this.view.container.context.asAbsolutePath(joinPaths('images', 'light', icon)),
+			};
+		}
+		item.tooltip = getFileTooltipMarkdown(this.file);
 		item.command = this.getCommand();
 
 		// Only cache the label for a single refresh (its only cached because it is used externally for sorting)
@@ -94,9 +114,9 @@ export class CommitFileNode<TView extends View = ViewsWithCommits | FileHistoryV
 
 	protected get contextValue(): string {
 		if (!this.commit.isUncommitted) {
-			return `${ContextValues.File}+committed${this._options.branch?.current ? '+current' : ''}${
-				this._options.branch?.current && this._options.branch.sha === this.commit.ref ? '+HEAD' : ''
-			}${this._options.unpublished ? '+unpublished' : ''}`;
+			return `${ContextValues.File}+committed${this.options?.branch?.current ? '+current' : ''}${
+				this.options?.branch?.current && this.options.branch.sha === this.commit.ref ? '+HEAD' : ''
+			}${this.options?.unpublished ? '+unpublished' : ''}`;
 		}
 
 		return this.commit.isUncommittedStaged ? `${ContextValues.File}+staged` : `${ContextValues.File}+unstaged`;
@@ -109,7 +129,7 @@ export class CommitFileNode<TView extends View = ViewsWithCommits | FileHistoryV
 	}
 
 	private _folderName: string | undefined;
-	get folderName() {
+	get folderName(): string {
 		if (this._folderName === undefined) {
 			this._folderName = relativeDir(this.uri.relativePath);
 		}
@@ -117,7 +137,7 @@ export class CommitFileNode<TView extends View = ViewsWithCommits | FileHistoryV
 	}
 
 	private _label: string | undefined;
-	get label() {
+	get label(): string {
 		if (this._label === undefined) {
 			this._label = StatusFileFormatter.fromTemplate(this.view.config.formats.files.label, this.file, {
 				relativePath: this.relativePath,
@@ -135,25 +155,12 @@ export class CommitFileNode<TView extends View = ViewsWithCommits | FileHistoryV
 		this._label = undefined;
 	}
 
-	private get tooltip() {
-		const tooltip = StatusFileFormatter.fromTemplate(
-			`\${file}\${'&nbsp;&nbsp;\u2022&nbsp;&nbsp;'changesDetail}\${'&nbsp;\\\n'directory}&nbsp;\n\n\${status}\${ (originalPath)}`,
-			this.file,
-		);
-
-		const markdown = new MarkdownString(tooltip, true);
-		markdown.supportHtml = true;
-		markdown.isTrusted = true;
-
-		return markdown;
-	}
-
 	override getCommand(): Command | undefined {
 		let line;
 		if (this.commit.lines.length) {
 			line = this.commit.lines[0].line - 1;
 		} else {
-			line = this._options.selection?.active.line ?? 0;
+			line = this.options?.selection?.active.line ?? 0;
 		}
 
 		const commandArgs: DiffWithPreviousCommandArgs = {
@@ -167,8 +174,24 @@ export class CommitFileNode<TView extends View = ViewsWithCommits | FileHistoryV
 		};
 		return {
 			title: 'Open Changes with Previous Revision',
-			command: Commands.DiffWithPrevious,
+			command: GlCommand.DiffWithPrevious,
 			arguments: [undefined, commandArgs],
 		};
+	}
+}
+
+export class CommitFileNode extends CommitFileNodeBase<'commit-file', ViewsWithCommits> {
+	constructor(
+		view: ViewsWithCommits,
+		parent: ViewNode,
+		file: GitFile,
+		commit: GitCommit,
+		options?: {
+			branch?: GitBranch;
+			selection?: Selection;
+			unpublished?: boolean;
+		},
+	) {
+		super('commit-file', view, parent, file, commit, options);
 	}
 }

@@ -1,241 +1,163 @@
-import { attr, css, customElement, FASTElement, html, observable, ref, volatile, when } from '@microsoft/fast-element';
+import type { TemplateResult } from 'lit';
+import { css, html } from 'lit';
+import { customElement, property, query } from 'lit/decorators.js';
+import type { Disposable } from 'vscode';
 import { isMac } from '@env/platform';
-import type { SearchQuery } from '../../../../../git/search';
+import type { SearchQuery } from '../../../../../constants.search';
 import { pluralize } from '../../../../../system/string';
-import type { Disposable } from '../../dom';
 import { DOM } from '../../dom';
-import { numberConverter } from '../converters/number-converter';
+import { GlElement } from '../element';
+import type { GlSearchInput, SearchModeChangeEventDetail, SearchNavigationEventDetail } from './search-input';
 import '../code-icon';
-import type { SearchInput } from './search-input';
+import '../overlays/tooltip';
+import '../progress';
 import './search-input';
-import './../progress';
 
-export type SearchNavigationDirection = 'first' | 'previous' | 'next' | 'last';
-export interface SearchNavigationEventDetail {
-	direction: SearchNavigationDirection;
+export { SearchModeChangeEventDetail, SearchNavigationEventDetail };
+
+declare global {
+	interface HTMLElementTagNameMap {
+		'gl-search-box': GlSearchBox;
+	}
+
+	interface GlobalEventHandlersEventMap {
+		'gl-search-openinview': CustomEvent<void>;
+	}
 }
 
-const template = html<SearchBox>`<template>
-	<search-input
-		${ref('searchInput')}
-		id="search-input"
-		:errorMessage="${x => x.errorMessage}"
-		label="${x => x.label}"
-		placeholder="${x => x.placeholder}"
-		matchAll="${x => x.matchAll}"
-		matchCase="${x => x.matchCase}"
-		matchRegex="${x => x.matchRegex}"
-		value="${x => x.value}"
-		@previous="${(x, c) => {
-			c.event.stopImmediatePropagation();
-			x.navigate('previous');
-		}}"
-		@next="${(x, c) => {
-			c.event.stopImmediatePropagation();
-			x.navigate('next');
-		}}"
-	></search-input>
-	<div class="search-navigation" aria-label="Search navigation">
-		<span class="count${x => (x.total < 1 && x.valid && x.resultsLoaded ? ' error' : '')}">
-			${when(x => x.searching, html<SearchBox>`<code-icon icon="loading" modifier="spin"></code-icon>`)}
-			${when(x => !x.searching && x.total < 1, html<SearchBox>`${x => x.formattedLabel}`)}
-			${when(
-				x => !x.searching && x.total > 0,
-				html<SearchBox>`<span aria-current="step">${x => x.step}</span> of
-					<span
-						class="${x => (x.resultsHidden ? 'sr-hidden' : '')}"
-						title="${x =>
-							x.resultsHidden
-								? 'Some search results are hidden or unable to be shown on the Commit Graph'
-								: ''}"
-						>${x => x.total}${x => (x.more ? '+' : '')}</span
-					><span class="sr-only"> ${x => x.formattedLabel}</span>`,
-			)}
-		</span>
-		<button
-			type="button"
-			class="button"
-			?disabled="${x => !x.hasResults}"
-			@click="${(x, c) => x.handlePrevious(c.event as MouseEvent)}"
-		>
-			<code-icon
-				icon="arrow-up"
-				aria-label="Previous Match (Shift+Enter)
-First Match (Shift+Click)"
-				title="Previous Match (Shift+Enter)
-First Match (Shift+Click)"
-			></code-icon>
-		</button>
-		<button
-			type="button"
-			class="button"
-			?disabled="${x => !x.hasResults}"
-			@click="${(x, c) => x.handleNext(c.event as MouseEvent)}"
-		>
-			<code-icon
-				icon="arrow-down"
-				aria-label="Next Match (Enter)
-Last Match (Shift+Click)"
-				title="Next Match (Enter)
-Last Match (Shift+Click)"
-			></code-icon>
-		</button>
-		<button
-			type="button"
-			class="button"
-			?disabled="${x => !x.hasResults}"
-			@click="${(x, c) => x.handleOpenInView(c.event)}"
-		>
-			<code-icon
-				icon="link-external"
-				aria-label="Show Results in Side Bar"
-				title="Show Results in Side Bar"
-			></code-icon>
-		</button>
-	</div>
-	<progress-indicator active="${x => x.searching}"></progress-indicator>
-</template>`;
+@customElement('gl-search-box')
+export class GlSearchBox extends GlElement {
+	static override styles = css`
+		:host {
+			display: inline-flex;
+			flex-direction: row;
+			align-items: center;
+			gap: 0.8rem;
+			color: var(--color-foreground);
+			flex: auto 1 1;
+			position: relative;
+		}
+		:host(:focus) {
+			outline: 0;
+		}
+		progress-indicator {
+			top: -4px;
+		}
 
-const styles = css`
-	:host {
-		display: inline-flex;
-		flex-direction: row;
-		align-items: center;
-		gap: 0.8rem;
-		color: var(--color-foreground);
-		flex: auto 1 1;
-		position: relative;
-	}
-	:host(:focus) {
-		outline: 0;
-	}
-	progress-indicator {
-		top: -4px;
-	}
+		.search-navigation {
+			display: inline-flex;
+			flex-direction: row;
+			align-items: center;
+			gap: 0.3rem;
+			color: var(--color-foreground);
+		}
+		.search-navigation:focus {
+			outline: 0;
+		}
 
-	.search-navigation {
-		display: inline-flex;
-		flex-direction: row;
-		align-items: center;
-		gap: 0.3rem;
-		color: var(--color-foreground);
-	}
-	.search-navigation:focus {
-		outline: 0;
-	}
+		.count {
+			flex: none;
+			margin-right: 0.4rem;
+			font-size: 1.2rem;
+			min-width: 10ch;
+		}
 
-	.count {
-		flex: none;
-		margin-right: 0.4rem;
-		font-size: 1.2rem;
-		min-width: 10ch;
-	}
+		.count.error {
+			color: var(--vscode-errorForeground);
+		}
 
-	.count.error {
-		color: var(--vscode-errorForeground);
-	}
+		.button {
+			width: 2.4rem;
+			height: 2.4rem;
+			padding: 0;
+			color: inherit;
+			border: none;
+			border-radius: 3px;
+			background: none;
+			text-align: center;
+		}
+		.button[disabled] {
+			color: var(--vscode-disabledForeground);
+		}
+		.button:focus {
+			background-color: var(--vscode-toolbar-activeBackground);
+			outline: 1px solid var(--vscode-focusBorder);
+			outline-offset: -1px;
+		}
+		.button:not([disabled]) {
+			cursor: pointer;
+		}
+		.button:hover:not([disabled]) {
+			color: var(--vscode-foreground);
+			background-color: var(--vscode-toolbar-hoverBackground);
+		}
+		.button > code-icon[icon='arrow-up'] {
+			transform: translateX(-0.1rem);
+		}
 
-	.button {
-		width: 2.4rem;
-		height: 2.4rem;
-		padding: 0;
-		color: inherit;
-		border: none;
-		background: none;
-		text-align: center;
-	}
-	.button[disabled] {
-		color: var(--vscode-disabledForeground);
-	}
-	.button:focus {
-		background-color: var(--vscode-toolbar-activeBackground);
-		outline: 1px solid var(--vscode-focusBorder);
-		outline-offset: -1px;
-	}
-	.button:not([disabled]) {
-		cursor: pointer;
-	}
-	.button:hover:not([disabled]) {
-		color: var(--vscode-foreground);
-		background-color: var(--vscode-toolbar-hoverBackground);
-	}
-	.button > code-icon[icon='arrow-up'] {
-		transform: translateX(-0.1rem);
-	}
+		.sr-hidden {
+			color: var(--vscode-errorForeground);
+		}
 
-	.sr-hidden {
-		color: var(--vscode-errorForeground);
-	}
+		.sr-only {
+			clip: rect(0 0 0 0);
+			clip-path: inset(50%);
+			height: 1px;
+			overflow: hidden;
+			position: absolute;
+			white-space: nowrap;
+			width: 1px;
+		}
+	`;
 
-	.sr-only {
-		clip: rect(0 0 0 0);
-		clip-path: inset(50%);
-		height: 1px;
-		overflow: hidden;
-		position: absolute;
-		white-space: nowrap;
-		width: 1px;
-	}
-`;
-
-@customElement({ name: 'search-box', template: template, styles: styles })
-export class SearchBox extends FASTElement {
-	@observable
+	@property({ type: String })
 	errorMessage = '';
 
-	@attr
-	label = 'Search';
-
-	@attr
-	placeholder = 'Search commits (↑↓ for history), e.g. "Updates dependencies" author:eamodio';
-
-	@attr
+	@property({ type: String })
 	value = '';
 
-	@attr({ mode: 'boolean' })
+	@property({ type: Boolean })
 	matchAll = false;
 
-	@attr({ mode: 'boolean' })
+	@property({ type: Boolean })
 	matchCase = false;
 
-	@attr({ mode: 'boolean' })
+	@property({ type: Boolean })
 	matchRegex = true;
 
-	@attr({ converter: numberConverter })
+	@property({ type: Boolean })
+	filter = false;
+
+	@property({ type: Number })
 	total = 0;
 
-	@attr({ converter: numberConverter })
+	@property({ type: Number })
 	step = 0;
 
-	@attr({ mode: 'boolean' })
+	@property({ type: Boolean })
 	more = false;
 
-	@attr({ mode: 'boolean' })
+	@property({ type: Boolean })
 	searching = false;
 
-	@attr({ mode: 'boolean' })
+	@property({ type: Boolean })
 	valid = false;
 
-	@attr({ mode: 'boolean' })
+	@property({ type: Boolean })
 	resultsHidden = false;
 
-	@attr
+	@property({ type: String })
 	resultsLabel = 'result';
 
-	@attr({ mode: 'boolean' })
+	@property({ type: Boolean })
 	resultsLoaded = false;
 
-	@volatile
-	get formattedLabel() {
-		return pluralize(this.resultsLabel, this.total, { zero: 'No' });
-	}
-
-	@volatile
-	get hasResults() {
+	get hasResults(): boolean {
 		return this.total > 1;
 	}
 
-	searchInput!: SearchInput;
+	@query('gl-search-input')
+	searchInput!: GlSearchInput;
 
 	private _disposable: Disposable | undefined;
 
@@ -255,16 +177,15 @@ export class SearchBox extends FASTElement {
 		this.searchInput?.focus(options);
 	}
 
-	navigate(direction: SearchNavigationEventDetail['direction']) {
-		const details: SearchNavigationEventDetail = { direction: direction };
-		this.$emit('navigate', details);
+	navigate(direction: SearchNavigationEventDetail['direction']): void {
+		this.emit('gl-search-navigate', { direction: direction });
 	}
 
-	logSearch(query: SearchQuery) {
+	logSearch(query: SearchQuery): void {
 		this.searchInput?.logSearch(query);
 	}
 
-	handleShortcutKeys(e: KeyboardEvent) {
+	private handleShortcutKeys(e: KeyboardEvent) {
 		if (e.altKey) return;
 
 		if ((e.key === 'F3' && !e.ctrlKey && !e.metaKey) || (e.key === 'g' && e.metaKey && !e.ctrlKey && isMac)) {
@@ -284,18 +205,110 @@ export class SearchBox extends FASTElement {
 		}
 	}
 
-	handlePrevious(e: MouseEvent) {
+	private handlePrevious(e: MouseEvent) {
 		e.stopImmediatePropagation();
 		this.navigate(e.shiftKey ? 'first' : 'previous');
 	}
 
-	handleNext(e: MouseEvent) {
+	private handleNext(e: MouseEvent) {
 		e.stopImmediatePropagation();
 		this.navigate(e.shiftKey ? 'last' : 'next');
 	}
 
-	handleOpenInView(e: Event) {
+	private handleOpenInView(e: Event) {
 		e.stopImmediatePropagation();
-		this.$emit('openinview');
+		this.emit('gl-search-openinview');
+	}
+
+	private get resultsHtml() {
+		if (this.searching) {
+			return html`<gl-tooltip hoist placement="top" class="count"
+				><code-icon icon="loading" modifier="spin"></code-icon><span slot="content">Searching...</span>
+			</gl-tooltip>`;
+		}
+
+		const totalFormatted = pluralize(this.resultsLabel, this.total, {
+			zero: 'No',
+			infix: this.more ? '+ ' : undefined,
+		});
+
+		let tooltip: string | TemplateResult = '';
+		let formatted = html`<span>${totalFormatted}</span>`;
+		if (this.total >= 1) {
+			tooltip = this.resultsHidden
+				? html`${totalFormatted} found &mdash; some results are hidden or unable to be shown on the Commit Graph`
+				: `${totalFormatted} found`;
+
+			const total = `${this.total}${this.more ? '+' : ''}`;
+			formatted = html`<span
+				><span aria-current="step">${this.step}</span> of
+				<span class="${this.resultsHidden ? 'sr-hidden' : ''}">${total}</span
+				><span class="sr-only"> ${totalFormatted}</span></span
+			>`;
+		} else if (this.resultsLoaded) {
+			tooltip = `${totalFormatted} found`;
+		}
+
+		return html`<gl-tooltip
+			hoist
+			placement="top"
+			?disabled="${!tooltip}"
+			class="count${this.total < 1 && this.valid && this.resultsLoaded ? ' error' : ''}"
+			>${formatted}<span slot="content">${tooltip}</span></gl-tooltip
+		>`;
+	}
+
+	override render(): unknown {
+		return html`<gl-search-input
+				id="search-input"
+				exportparts="search: search"
+				.errorMessage="${this.errorMessage}"
+				.filter=${this.filter}
+				.matchAll="${this.matchAll}"
+				.matchCase="${this.matchCase}"
+				.matchRegex="${this.matchRegex}"
+				.value="${this.value}"
+				@gl-search-navigate="${(e: CustomEvent<SearchNavigationEventDetail>) => {
+					e.stopImmediatePropagation();
+					this.navigate(e.detail.direction);
+				}}"
+			></gl-search-input>
+			<div class="search-navigation" aria-label="Search navigation">
+				${this.resultsHtml}
+				<gl-tooltip hoist>
+					<button
+						type="button"
+						class="button"
+						?disabled="${!this.hasResults}"
+						@click="${this.handlePrevious}"
+					>
+						<code-icon
+							icon="arrow-up"
+							aria-label="Previous Match (Shift+Enter)&#10;First Match (Shift+Click)"
+						></code-icon>
+					</button>
+					<span slot="content">Previous Match (Shift+Enter)<br />First Match (Shift+Click)</span>
+				</gl-tooltip>
+				<gl-tooltip hoist>
+					<button type="button" class="button" ?disabled="${!this.hasResults}" @click="${this.handleNext}">
+						<code-icon
+							icon="arrow-down"
+							aria-label="Next Match (Enter)&#10;Last Match (Shift+Click)"
+						></code-icon>
+					</button>
+					<span slot="content">Next Match (Enter)<br />Last Match (Shift+Click)</span>
+				</gl-tooltip>
+				<gl-tooltip hoist content="Show Results in Side Bar">
+					<button
+						type="button"
+						class="button"
+						?disabled="${!this.hasResults}"
+						@click="${this.handleOpenInView}"
+					>
+						<code-icon icon="link-external" aria-label="Show Results in Side Bar"></code-icon>
+					</button>
+				</gl-tooltip>
+			</div>
+			<progress-indicator active="${this.searching}"></progress-indicator>`;
 	}
 }

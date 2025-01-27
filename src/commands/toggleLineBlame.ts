@@ -1,15 +1,15 @@
 import type { TextEditor, Uri } from 'vscode';
-import { window } from 'vscode';
-import { Commands } from '../constants';
+import { GlCommand } from '../constants.commands';
 import type { Container } from '../container';
-import { Logger } from '../logger';
-import { command } from '../system/command';
-import { ActiveEditorCommand } from './base';
+import { showGenericErrorMessage } from '../messages';
+import { command } from '../system/-webview/command';
+import { Logger } from '../system/logger';
+import { ActiveEditorCommand } from './commandBase';
 
 @command()
 export class ToggleLineBlameCommand extends ActiveEditorCommand {
 	constructor(private readonly container: Container) {
-		super(Commands.ToggleLineBlame);
+		super(GlCommand.ToggleLineBlame);
 	}
 
 	async execute(editor: TextEditor, _uri?: Uri): Promise<void> {
@@ -17,9 +17,7 @@ export class ToggleLineBlameCommand extends ActiveEditorCommand {
 			await this.container.lineAnnotations.toggle(editor);
 		} catch (ex) {
 			Logger.error(ex, 'ToggleLineBlameCommand');
-			void window.showErrorMessage(
-				'Unable to toggle line blame annotations. See output channel for more details',
-			);
+			void showGenericErrorMessage('Unable to toggle line blame annotations');
 		}
 	}
 }

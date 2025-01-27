@@ -1,16 +1,16 @@
 import type { TextEditor, Uri } from 'vscode';
-import { executeGitCommand, GitActions } from '../commands/gitCommands.actions';
-import { Commands } from '../constants';
+import { GlCommand } from '../constants.commands';
 import type { Container } from '../container';
+import { executeGitCommand } from '../git/actions';
 import { GitUri } from '../git/gitUri';
-import { GitReference } from '../git/models/reference';
 import { createSearchQueryForCommits } from '../git/search';
-import { Logger } from '../logger';
 import { showFileNotUnderSourceControlWarningMessage, showGenericErrorMessage } from '../messages';
-import { command } from '../system/command';
+import { command } from '../system/-webview/command';
+import { createMarkdownCommandLink } from '../system/commands';
 import { filterMap } from '../system/iterable';
-import type { CommandContext } from './base';
-import { ActiveEditorCommand, getCommandUri, isCommandContextViewNodeHasCommit } from './base';
+import { Logger } from '../system/logger';
+import { ActiveEditorCommand } from './commandBase';
+import { getCommandUri } from './commandBase.utils';
 
 export interface ShowCommitsInViewCommandArgs {
 	refs?: string[];
@@ -19,33 +19,21 @@ export interface ShowCommitsInViewCommandArgs {
 
 @command()
 export class ShowCommitsInViewCommand extends ActiveEditorCommand {
-	static getMarkdownCommandArgs(sha: string, repoPath: string): string;
-	static getMarkdownCommandArgs(args: ShowCommitsInViewCommandArgs): string;
-	static getMarkdownCommandArgs(argsOrSha: ShowCommitsInViewCommandArgs | string, repoPath?: string): string {
+	static createMarkdownCommandLink(sha: string, repoPath: string): string;
+	static createMarkdownCommandLink(args: ShowCommitsInViewCommandArgs): string;
+	static createMarkdownCommandLink(argsOrSha: ShowCommitsInViewCommandArgs | string, repoPath?: string): string {
 		const args = typeof argsOrSha === 'string' ? { refs: [argsOrSha], repoPath: repoPath } : argsOrSha;
-		return super.getMarkdownCommandArgsCore<ShowCommitsInViewCommandArgs>(Commands.ShowCommitInView, args);
+		return createMarkdownCommandLink<ShowCommitsInViewCommandArgs>(GlCommand.ShowCommitsInView, args);
 	}
 
 	constructor(private readonly container: Container) {
-		super([Commands.ShowCommitInView, Commands.ShowInDetailsView, Commands.ShowCommitsInView]);
+		super(GlCommand.ShowCommitsInView);
 	}
 
-	protected override preExecute(context: CommandContext, args?: ShowCommitsInViewCommandArgs) {
-		if (context.type === 'viewItem') {
-			args = { ...args };
-			if (isCommandContextViewNodeHasCommit(context)) {
-				args.refs = [context.node.commit.sha];
-				args.repoPath = context.node.commit.repoPath;
-			}
-		}
-
-		return this.execute(context.editor, context.uri, args);
-	}
-
-	async execute(editor?: TextEditor, uri?: Uri, args?: ShowCommitsInViewCommandArgs) {
+	async execute(editor?: TextEditor, uri?: Uri, args?: ShowCommitsInViewCommandArgs): Promise<void> {
 		args = { ...args };
 
-		if (args.refs === undefined) {
+		if (args.refs == null) {
 			uri = getCommandUri(uri, editor);
 			if (uri == null) return undefined;
 
@@ -64,13 +52,13 @@ export class ShowCommitsInViewCommand extends ActiveEditorCommand {
 						  )
 						: await this.container.git.getBlameForRange(gitUri, editor.selection);
 					if (blame === undefined) {
-						return showFileNotUnderSourceControlWarningMessage('Unable to find commits');
+						return void showFileNotUnderSourceControlWarningMessage('Unable to find commits');
 					}
 
 					args.refs = [...filterMap(blame.commits.values(), c => (c.isUncommitted ? undefined : c.ref))];
 				} catch (ex) {
 					Logger.error(ex, 'ShowCommitsInViewCommand', 'getBlameForRange');
-					return showGenericErrorMessage('Unable to find commits');
+					return void showGenericErrorMessage('Unable to find commits');
 				}
 			} else {
 				if (gitUri.sha == null) return undefined;
@@ -79,11 +67,9 @@ export class ShowCommitsInViewCommand extends ActiveEditorCommand {
 			}
 		}
 
-		if (args.refs.length === 1) {
-			return GitActions.Commit.showDetailsView(
-				GitReference.create(args.refs[0], args.repoPath!, { refType: 'revision' }),
-			);
-		}
+		// if (args.refs.length === 1) {
+		// 	return showDetailsView(createReference(args.refs[0], args.repoPath!, { refType: 'revision' }));
+		// }
 
 		return executeGitCommand({
 			command: 'search',

@@ -1,22 +1,22 @@
 import type { TextEditor, Uri } from 'vscode';
 import { env } from 'vscode';
-import { configuration } from '../configuration';
-import { Commands } from '../constants';
+import { GlCommand } from '../constants.commands';
 import type { Container } from '../container';
 import { GitUri } from '../git/gitUri';
-import { GitRevision } from '../git/models/reference';
-import { Logger } from '../logger';
+import { shortenRevision } from '../git/utils/revision.utils';
 import { showGenericErrorMessage } from '../messages';
-import { command } from '../system/command';
+import { command } from '../system/-webview/command';
+import { configuration } from '../system/-webview/configuration';
 import { first } from '../system/iterable';
-import type { CommandContext } from './base';
+import { Logger } from '../system/logger';
+import { ActiveEditorCommand } from './commandBase';
+import { getCommandUri } from './commandBase.utils';
+import type { CommandContext } from './commandContext';
 import {
-	ActiveEditorCommand,
-	getCommandUri,
 	isCommandContextViewNodeHasBranch,
 	isCommandContextViewNodeHasCommit,
 	isCommandContextViewNodeHasTag,
-} from './base';
+} from './commandContext.utils';
 
 export interface CopyShaToClipboardCommandArgs {
 	sha?: string;
@@ -25,10 +25,10 @@ export interface CopyShaToClipboardCommandArgs {
 @command()
 export class CopyShaToClipboardCommand extends ActiveEditorCommand {
 	constructor(private readonly container: Container) {
-		super(Commands.CopyShaToClipboard);
+		super(GlCommand.CopyShaToClipboard);
 	}
 
-	protected override preExecute(context: CommandContext, args?: CopyShaToClipboardCommandArgs) {
+	protected override preExecute(context: CommandContext, args?: CopyShaToClipboardCommandArgs): Promise<void> {
 		if (isCommandContextViewNodeHasCommit(context)) {
 			args = { ...args };
 			args.sha = context.node.commit.sha;
@@ -50,7 +50,7 @@ export class CopyShaToClipboardCommand extends ActiveEditorCommand {
 		return this.execute(context.editor, context.uri, args);
 	}
 
-	async execute(editor?: TextEditor, uri?: Uri, args?: CopyShaToClipboardCommandArgs) {
+	async execute(editor?: TextEditor, uri?: Uri, args?: CopyShaToClipboardCommandArgs): Promise<void> {
 		uri = getCommandUri(uri, editor);
 		args = { ...args };
 
@@ -61,7 +61,7 @@ export class CopyShaToClipboardCommand extends ActiveEditorCommand {
 					const repoPath = this.container.git.getBestRepository(editor)?.path;
 					if (!repoPath) return;
 
-					const log = await this.container.git.getLog(repoPath, { limit: 1 });
+					const log = await this.container.git.commits(repoPath).getLog(undefined, { limit: 1 });
 					if (log == null) return;
 
 					args.sha = first(log.commits.values())?.sha;
@@ -86,7 +86,7 @@ export class CopyShaToClipboardCommand extends ActiveEditorCommand {
 			}
 
 			await env.clipboard.writeText(
-				configuration.get('advanced.abbreviateShaOnCopy') ? GitRevision.shorten(args.sha) : args.sha,
+				configuration.get('advanced.abbreviateShaOnCopy') ? shortenRevision(args.sha) : args.sha,
 			);
 		} catch (ex) {
 			Logger.error(ex, 'CopyShaToClipboardCommand');

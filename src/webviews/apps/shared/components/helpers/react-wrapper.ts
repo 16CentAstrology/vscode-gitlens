@@ -1,6 +1,20 @@
-import { provideReactWrapper } from '@microsoft/fast-react-wrapper';
+import type { EventName, Options, ReactWebComponent } from '@lit/react';
+import { createComponent } from '@lit/react';
 import React from 'react';
 
-const { wrap } = provideReactWrapper(React);
+type Constructor<T> = new () => T;
+type EventNames = Record<string, EventName | string>;
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+type Opts<I extends HTMLElement, E extends EventNames = {}> = Omit<Options<I, E>, 'elementClass' | 'react'>;
 
-export { wrap as reactWrapper };
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export function reactWrapper<I extends HTMLElement, E extends EventNames = {}>(
+	elementClass: Constructor<I>,
+	options: Opts<I, E>,
+): ReactWebComponent<I, E> {
+	return createComponent<I, E>({
+		...options,
+		elementClass: elementClass,
+		react: React,
+	});
+}

@@ -1,26 +1,26 @@
-import { Commands } from '../constants';
+import { GlCommand } from '../constants.commands';
 import type { Container } from '../container';
-import { command } from '../system/command';
-import { Command } from './base';
+import { command } from '../system/-webview/command';
+import { GlCommandBase } from './commandBase';
 
 @command()
-export class DisableRebaseEditorCommand extends Command {
+export class DisableRebaseEditorCommand extends GlCommandBase {
 	constructor(private readonly container: Container) {
-		super(Commands.DisableRebaseEditor);
+		super(GlCommand.DisableRebaseEditor);
 	}
 
-	execute() {
+	execute(): Promise<void> {
 		return this.container.rebaseEditor.setEnabled(false);
 	}
 }
 
 @command()
-export class EnableRebaseEditorCommand extends Command {
+export class EnableRebaseEditorCommand extends GlCommandBase {
 	constructor(private readonly container: Container) {
-		super(Commands.EnableRebaseEditor);
+		super(GlCommand.EnableRebaseEditor);
 	}
 
-	execute() {
+	execute(): Promise<void> {
 		return this.container.rebaseEditor.setEnabled(true);
 	}
 }

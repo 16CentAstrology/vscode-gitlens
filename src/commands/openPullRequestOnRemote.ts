@@ -1,10 +1,11 @@
-import { env, Uri } from 'vscode';
-import { Commands } from '../constants';
+import { env, window } from 'vscode';
+import { GlCommand } from '../constants.commands';
 import type { Container } from '../container';
-import { command } from '../system/command';
-import { PullRequestNode } from '../views/nodes/pullRequestNode';
-import type { CommandContext } from './base';
-import { Command } from './base';
+import { shortenRevision } from '../git/utils/revision.utils';
+import { command } from '../system/-webview/command';
+import { openUrl } from '../system/-webview/vscode';
+import { GlCommandBase } from './commandBase';
+import type { CommandContext } from './commandContext';
 
 export interface OpenPullRequestOnRemoteCommandArgs {
 	clipboard?: boolean;
@@ -14,32 +15,38 @@ export interface OpenPullRequestOnRemoteCommandArgs {
 }
 
 @command()
-export class OpenPullRequestOnRemoteCommand extends Command {
+export class OpenPullRequestOnRemoteCommand extends GlCommandBase {
 	constructor(private readonly container: Container) {
-		super([Commands.OpenPullRequestOnRemote, Commands.CopyRemotePullRequestUrl]);
+		super([GlCommand.OpenPullRequestOnRemote, GlCommand.CopyRemotePullRequestUrl]);
 	}
 
-	protected override preExecute(context: CommandContext, args?: OpenPullRequestOnRemoteCommandArgs) {
-		if (context.type === 'viewItem' && context.node instanceof PullRequestNode) {
+	protected override preExecute(context: CommandContext, args?: OpenPullRequestOnRemoteCommandArgs): Promise<void> {
+		if (context.type === 'viewItem' && (context.node.is('pullrequest') || context.node.is('launchpad-item'))) {
 			args = {
 				...args,
-				pr: { url: context.node.pullRequest.url },
-				clipboard: context.command === Commands.CopyRemotePullRequestUrl,
+				pr: context.node.pullRequest != null ? { url: context.node.pullRequest.url } : undefined,
+				clipboard: context.command === GlCommand.CopyRemotePullRequestUrl,
 			};
 		}
 
 		return this.execute(args);
 	}
 
-	async execute(args?: OpenPullRequestOnRemoteCommandArgs) {
+	async execute(args?: OpenPullRequestOnRemoteCommandArgs): Promise<void> {
 		if (args?.pr == null) {
 			if (args?.repoPath == null || args?.ref == null) return;
 
-			const remote = await this.container.git.getBestRemoteWithRichProvider(args.repoPath);
-			if (remote?.provider == null) return;
+			const remote = await this.container.git.remotes(args.repoPath).getBestRemoteWithIntegration();
+			if (remote == null) return;
 
-			const pr = await this.container.git.getPullRequestForCommit(args.ref, remote.provider);
-			if (pr == null) return;
+			const provider = await this.container.integrations.getByRemote(remote);
+			if (provider == null) return;
+
+			const pr = await provider.getPullRequestForCommit(remote.provider.repoDesc, args.ref);
+			if (pr == null) {
+				void window.showInformationMessage(`No pull request associated with '${shortenRevision(args.ref)}'`);
+				return;
+			}
 
 			args = { ...args };
 			args.pr = pr;
@@ -48,7 +55,7 @@ export class OpenPullRequestOnRemoteCommand extends Command {
 		if (args.clipboard) {
 			await env.clipboard.writeText(args.pr.url);
 		} else {
-			void env.openExternal(Uri.parse(args.pr.url));
+			void openUrl(args.pr.url);
 		}
 	}
 }
