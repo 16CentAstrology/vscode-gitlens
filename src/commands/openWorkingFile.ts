@@ -1,14 +1,14 @@
 import type { TextDocumentShowOptions, TextEditor, Uri } from 'vscode';
 import { Range, window } from 'vscode';
-import type { FileAnnotationType } from '../configuration';
-import { Commands } from '../constants';
+import type { FileAnnotationType } from '../config';
 import type { Container } from '../container';
 import { GitUri, isGitUri } from '../git/gitUri';
-import { Logger } from '../logger';
 import { showGenericErrorMessage } from '../messages';
-import { command } from '../system/command';
-import { findOrOpenEditor } from '../system/utils';
-import { ActiveEditorCommand, getCommandUri } from './base';
+import { command } from '../system/-webview/command';
+import { findOrOpenEditor } from '../system/-webview/vscode';
+import { Logger } from '../system/logger';
+import { ActiveEditorCommand } from './commandBase';
+import { getCommandUri } from './commandBase.utils';
 
 export interface OpenWorkingFileCommandArgs {
 	uri?: Uri;
@@ -20,10 +20,10 @@ export interface OpenWorkingFileCommandArgs {
 @command()
 export class OpenWorkingFileCommand extends ActiveEditorCommand {
 	constructor(private readonly container: Container) {
-		super([Commands.OpenWorkingFile, Commands.OpenWorkingFileInDiffLeft, Commands.OpenWorkingFileInDiffRight]);
+		super(['gitlens.openWorkingFile', 'gitlens.openWorkingFileInDiffLeft', 'gitlens.openWorkingFileInDiffRight']);
 	}
 
-	async execute(editor: TextEditor, uri?: Uri, args?: OpenWorkingFileCommandArgs) {
+	async execute(editor: TextEditor, uri?: Uri, args?: OpenWorkingFileCommandArgs): Promise<void> {
 		args = { ...args };
 		if (args.line == null) {
 			args.line = editor?.selection.active.line;

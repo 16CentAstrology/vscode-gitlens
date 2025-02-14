@@ -1,367 +1,90 @@
 /*global*/
 import './home.scss';
-import { provideVSCodeDesignSystem, vsCodeButton } from '@vscode/webview-ui-toolkit';
-import type { Disposable } from 'vscode';
-import { getSubscriptionTimeRemaining, SubscriptionState } from '../../../subscription';
+import { provide } from '@lit/context';
+import { html } from 'lit';
+import { customElement, query } from 'lit/decorators.js';
+import { when } from 'lit/directives/when.js';
 import type { State } from '../../home/protocol';
+import { DidFocusAccount } from '../../home/protocol';
 import {
-	CompleteStepCommandType,
-	DidChangeConfigurationType,
-	DidChangeExtensionEnabledType,
-	DidChangeLayoutType,
-	DidChangeSubscriptionNotificationType,
-	DismissBannerCommandType,
-	DismissSectionCommandType,
-	DismissStatusCommandType,
-} from '../../home/protocol';
-import type { IpcMessage } from '../../protocol';
-import { ExecuteCommandType, onIpc } from '../../protocol';
-import { App } from '../shared/appBase';
-import { DOM } from '../shared/dom';
-import type { CardSection } from './components/card-section';
-import type { HeaderCard } from './components/header-card';
-import type { PlusBanner } from './components/plus-banner';
-import type { SteppedSection } from './components/stepped-section';
-import '../shared/components/code-icon';
-import '../shared/components/overlays/pop-over';
-import './components/card-section';
-import './components/stepped-section';
-import './components/plus-banner';
-import './components/plus-content';
-import './components/header-card';
+	ActiveOverviewState,
+	activeOverviewStateContext,
+	InactiveOverviewState,
+	inactiveOverviewStateContext,
+} from '../plus/home/components/overviewState';
+import type { GLHomeHeader } from '../plus/shared/components/home-header';
+import { GlApp } from '../shared/app';
+import { scrollableBase } from '../shared/components/styles/lit/base.css';
+import type { HostIpc } from '../shared/ipc';
+import { homeBaseStyles, homeStyles } from './home.css';
+import { HomeStateProvider } from './stateProvider';
+import '../plus/shared/components/home-header';
+import '../plus/home/components/active-work';
+import '../plus/home/components/launchpad';
+import '../plus/home/components/overview';
+import './components/feature-nav';
+import './components/ama-banner';
+import './components/integration-banner';
+import './components/preview-banner';
+import './components/promo-banner';
+import './components/repo-alerts';
 
-export class HomeApp extends App<State> {
-	private $steps!: SteppedSection[];
-	private $cards!: CardSection[];
+@customElement('gl-home-app')
+export class GlHomeApp extends GlApp<State> {
+	static override styles = [homeBaseStyles, scrollableBase, homeStyles];
 
-	constructor() {
-		super('HomeApp');
+	@provide({ context: activeOverviewStateContext })
+	private _activeOverviewState!: ActiveOverviewState;
+
+	@provide({ context: inactiveOverviewStateContext })
+	private _inactiveOverviewState!: InactiveOverviewState;
+
+	@query('gl-home-header')
+	private _header!: GLHomeHeader;
+
+	private badgeSource = { source: 'home', detail: 'badge' };
+
+	protected override createStateProvider(state: State, ipc: HostIpc): HomeStateProvider {
+		this.disposables.push((this._activeOverviewState = new ActiveOverviewState(ipc)));
+		this.disposables.push((this._inactiveOverviewState = new InactiveOverviewState(ipc)));
+
+		return new HomeStateProvider(this, state, ipc);
 	}
 
-	protected override onInitialize() {
-		provideVSCodeDesignSystem().register(vsCodeButton());
+	override connectedCallback(): void {
+		super.connectedCallback();
 
-		this.$steps = [...document.querySelectorAll<SteppedSection>('stepped-section[id]')];
-		this.$cards = [...document.querySelectorAll<CardSection>('card-section[id]')];
-
-		this.updateState();
-	}
-
-	protected override onBind(): Disposable[] {
-		const disposables = super.onBind?.() ?? [];
-
-		disposables.push(
-			DOM.on('[data-action]', 'click', (e, target: HTMLElement) => this.onDataActionClicked(e, target)),
-		);
-		disposables.push(
-			DOM.on<PlusBanner, string>('plus-banner', 'action', (e, target: HTMLElement) =>
-				this.onPlusActionClicked(e, target),
-			),
-		);
-		disposables.push(
-			DOM.on<SteppedSection, boolean>('stepped-section', 'complete', (e, target: HTMLElement) =>
-				this.onStepComplete(e, target),
-			),
-		);
-		disposables.push(
-			DOM.on<CardSection, undefined>('card-section', 'dismiss', (e, target: HTMLElement) =>
-				this.onCardDismissed(e, target),
-			),
-		);
-		disposables.push(
-			DOM.on<HeaderCard, undefined>('header-card', 'dismiss-status', (e, target: HTMLElement) =>
-				this.onStatusDismissed(e, target),
-			),
-		);
-		disposables.push(
-			DOM.on('[data-banner-dismiss]', 'click', (e, target: HTMLElement) => this.onBannerDismissed(e, target)),
-		);
-
-		return disposables;
-	}
-
-	protected override onMessageReceived(e: MessageEvent) {
-		const msg = e.data as IpcMessage;
-
-		switch (msg.method) {
-			case DidChangeSubscriptionNotificationType.method:
-				this.log(`${this.appName}.onMessageReceived(${msg.id}): name=${msg.method}`);
-
-				onIpc(DidChangeSubscriptionNotificationType, msg, params => {
-					this.state.subscription = params.subscription;
-					this.state.completedActions = params.completedActions;
-					this.state.avatar = params.avatar;
-					this.state.pinStatus = params.pinStatus;
-					this.updateState();
-				});
-				break;
-			case DidChangeExtensionEnabledType.method:
-				this.log(`${this.appName}.onMessageReceived(${msg.id}): name=${msg.method}`);
-
-				onIpc(DidChangeExtensionEnabledType, msg, params => {
-					this.state.extensionEnabled = params.extensionEnabled;
-					this.updateNoRepo();
-				});
-				break;
-			case DidChangeConfigurationType.method:
-				this.log(`${this.appName}.onMessageReceived(${msg.id}): name=${msg.method}`);
-
-				onIpc(DidChangeConfigurationType, msg, params => {
-					this.state.plusEnabled = params.plusEnabled;
-					this.updatePlusContent();
-				});
-				break;
-			case DidChangeLayoutType.method:
-				this.log(`${this.appName}.onMessageReceived(${msg.id}): name=${msg.method}`);
-
-				onIpc(DidChangeLayoutType, msg, params => {
-					this.state.layout = params.layout;
-					this.updateLayout();
-				});
-				break;
-
-			default:
-				super.onMessageReceived?.(e);
-				break;
-		}
-	}
-
-	private onStepComplete(e: CustomEvent<boolean>, target: HTMLElement) {
-		const id = target.id;
-		const isComplete = e.detail ?? false;
-		this.state.completedSteps = toggleArrayItem(this.state.completedSteps, id, isComplete);
-		this.sendCommand(CompleteStepCommandType, { id: id, completed: isComplete });
-		this.updateState();
-	}
-
-	private onCardDismissed(e: CustomEvent<undefined>, target: HTMLElement) {
-		const id = target.id;
-		this.state.dismissedSections = toggleArrayItem(this.state.dismissedSections, id);
-		this.sendCommand(DismissSectionCommandType, { id: id });
-		this.updateState();
-	}
-
-	private onStatusDismissed(_e: CustomEvent<undefined>, _target: HTMLElement) {
-		this.state.pinStatus = false;
-		this.sendCommand(DismissStatusCommandType, undefined);
-		this.updateHeader();
-	}
-
-	private onBannerDismissed(_e: MouseEvent, target: HTMLElement) {
-		const key = target.getAttribute('data-banner-dismiss');
-		if (key == null || this.state.dismissedBanners?.includes(key)) {
-			return;
-		}
-		this.state.dismissedBanners = this.state.dismissedBanners ?? [];
-		this.state.dismissedBanners.push(key);
-		this.sendCommand(DismissBannerCommandType, { id: key });
-		this.updateBanners();
-	}
-
-	private onDataActionClicked(_e: MouseEvent, target: HTMLElement) {
-		const action = target.dataset.action;
-		this.onActionClickedCore(action);
-	}
-
-	private onPlusActionClicked(e: CustomEvent<string>, _target: HTMLElement) {
-		this.onActionClickedCore(e.detail);
-	}
-
-	private onActionClickedCore(action?: string) {
-		if (action?.startsWith('command:')) {
-			this.sendCommand(ExecuteCommandType, { command: action.slice(8) });
-		}
-	}
-
-	private getDaysRemaining() {
-		if (
-			![SubscriptionState.FreeInPreviewTrial, SubscriptionState.FreePlusInTrial].includes(
-				this.state.subscription.state,
-			)
-		) {
-			return 0;
-		}
-
-		return getSubscriptionTimeRemaining(this.state.subscription, 'days') ?? 0;
-	}
-
-	private forceShowPlus() {
-		return [
-			SubscriptionState.FreePreviewTrialExpired,
-			SubscriptionState.FreePlusTrialExpired,
-			SubscriptionState.VerificationRequired,
-		].includes(this.state.subscription.state);
-	}
-
-	private updateHeader(days = this.getDaysRemaining(), forceShowPlus = this.forceShowPlus()) {
-		const { subscription, completedSteps, avatar, pinStatus } = this.state;
-
-		const $headerContent = document.getElementById('header-card') as HeaderCard;
-		if ($headerContent) {
-			if (avatar) {
-				$headerContent.setAttribute('image', avatar);
-			}
-			$headerContent.setAttribute('name', subscription.account?.name ?? '');
-
-			const steps = this.$steps?.length ?? 0;
-			let completed = completedSteps?.length ?? 0;
-			if (steps > 0 && completed > 0) {
-				const stepIds = this.$steps.map(el => el.id);
-				const availableCompleted = completedSteps!.filter(name => stepIds.includes(name));
-				completed = availableCompleted.length;
-
-				if (forceShowPlus && availableCompleted.includes('plus')) {
-					completed -= 1;
+		this.disposables.push(
+			this._ipc.onReceiveMessage(msg => {
+				switch (true) {
+					case DidFocusAccount.is(msg):
+						this._header.show();
+						break;
 				}
-			}
-
-			$headerContent.setAttribute('steps', steps.toString());
-			$headerContent.setAttribute('completed', completed.toString());
-			$headerContent.setAttribute('state', subscription.state.toString());
-			$headerContent.setAttribute('plan', subscription.plan.effective.name);
-			$headerContent.setAttribute('days', days.toString());
-			$headerContent.pinStatus = pinStatus;
-		}
+			}),
+		);
 	}
 
-	private updateBanners() {
-		const $banners = [...document.querySelectorAll('[data-banner]')];
-		if (!$banners.length) {
-			return;
-		}
-
-		const { subscription, dismissedBanners } = this.state;
-		const isPaid = subscription.state === SubscriptionState.Paid;
-		$banners.forEach($el => {
-			const key = $el.getAttribute('data-banner');
-			if (
-				isPaid ||
-				(key !== null && dismissedBanners?.includes(key)) ||
-				(key === 'cyberweek2022' && !showCyberWeek())
-			) {
-				$el.setAttribute('hidden', 'true');
-			} else {
-				$el.removeAttribute('hidden');
-			}
-		});
-	}
-
-	private updateNoRepo() {
-		const { extensionEnabled } = this.state;
-
-		const $el = document.getElementById('no-repo');
-		if ($el) {
-			$el.setAttribute('aria-hidden', extensionEnabled ? 'true' : 'false');
-		}
-	}
-
-	private updateLayout() {
-		const { layout } = this.state;
-
-		const $els = [...document.querySelectorAll('[data-gitlens-layout]')];
-		$els.forEach(el => {
-			const attr = el.getAttribute('data-gitlens-layout');
-			el.classList.toggle('is-active', attr === layout);
-		});
-	}
-
-	private updatePlusContent(days = this.getDaysRemaining()) {
-		const { subscription, visibility, plusEnabled } = this.state;
-
-		let $plusContent = document.getElementById('plus-banner');
-		if ($plusContent) {
-			$plusContent.setAttribute('days', days.toString());
-			$plusContent.setAttribute('state', subscription.state.toString());
-			$plusContent.setAttribute('visibility', visibility);
-			$plusContent.setAttribute('plan', subscription.plan.effective.name);
-			$plusContent.setAttribute('plus', plusEnabled.toString());
-		}
-
-		$plusContent = document.getElementById('plus-content');
-		if ($plusContent) {
-			$plusContent.setAttribute('days', days.toString());
-			$plusContent.setAttribute('state', subscription.state.toString());
-			$plusContent.setAttribute('visibility', visibility);
-			$plusContent.setAttribute('plan', subscription.plan.effective.name);
-		}
-	}
-
-	private updateSteps(forceShowPlus = this.forceShowPlus()) {
-		if (
-			this.$steps == null ||
-			this.$steps.length === 0 ||
-			this.state.completedSteps == null ||
-			this.state.completedSteps.length === 0
-		) {
-			return;
-		}
-
-		this.$steps.forEach(el => {
-			el.setAttribute(
-				'completed',
-				(el.id === 'plus' && forceShowPlus) || this.state.completedSteps?.includes(el.id) !== true
-					? 'false'
-					: 'true',
-			);
-		});
-	}
-
-	private updateSections() {
-		if (
-			this.$cards == null ||
-			this.$cards.length === 0 ||
-			this.state.dismissedSections == null ||
-			this.state.dismissedSections.length === 0
-		) {
-			return;
-		}
-
-		this.state.dismissedSections.forEach(id => {
-			const found = this.$cards.findIndex(el => el.id === id);
-			if (found > -1) {
-				this.$cards[found].remove();
-				this.$cards.splice(found, 1);
-			}
-		});
-	}
-
-	private updateState() {
-		const { completedSteps, dismissedSections } = this.state;
-
-		this.updateNoRepo();
-		this.updateLayout();
-
-		const showRestoreWelcome = completedSteps?.length || dismissedSections?.length;
-		document.getElementById('restore-welcome')?.classList.toggle('hide', !showRestoreWelcome);
-
-		const forceShowPlus = this.forceShowPlus();
-		const days = this.getDaysRemaining();
-		this.updateHeader(days, forceShowPlus);
-		this.updatePlusContent(days);
-
-		this.updateSteps(forceShowPlus);
-
-		this.updateSections();
-		this.updateBanners();
+	override render(): unknown {
+		return html`
+			<div class="home scrollable">
+				<gl-home-header class="home__header"></gl-home-header>
+				${when(this.state?.amaBannerCollapsed === false, () => html`<gl-ama-banner></gl-ama-banner>`)}
+				${when(!this.state?.previewEnabled, () => html`<gl-preview-banner></gl-preview-banner>`)}
+				<gl-repo-alerts class="home__alerts"></gl-repo-alerts>
+				<main class="home__main scrollable" id="main">
+					${when(
+						this.state?.previewEnabled === true,
+						() => html`
+							<gl-preview-banner></gl-preview-banner>
+							<gl-active-work></gl-active-work>
+							<gl-launchpad></gl-launchpad>
+							<gl-overview></gl-overview>
+						`,
+						() => html`<gl-feature-nav .badgeSource=${this.badgeSource}></gl-feature-nav>`,
+					)}
+				</main>
+			</div>
+		`;
 	}
 }
-
-function toggleArrayItem(list: string[] = [], item: string, add = true) {
-	const hasStep = list.includes(item);
-	if (!hasStep && add) {
-		list.push(item);
-	} else if (hasStep && !add) {
-		list.splice(list.indexOf(item), 1);
-	}
-
-	return list;
-}
-
-const cyberweekStart = Date.parse('2022-11-28T07:00:00.000-08:00');
-const cyberweekEnding = Date.parse('2022-12-06T00:00:00.000-08:00');
-function showCyberWeek() {
-	const now = Date.now();
-	return now < cyberweekEnding && now >= cyberweekStart;
-}
-
-new HomeApp();

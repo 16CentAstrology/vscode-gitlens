@@ -1,28 +1,26 @@
 import { ConfigurationTarget } from 'vscode';
-import { configuration } from '../configuration';
-import { Commands } from '../constants';
 import type { Container } from '../container';
-import { ModePicker } from '../quickpicks/modePicker';
-import { command } from '../system/command';
-import { getLogScope, log } from '../system/decorators/log';
-import { Command } from './base';
+import { showModePicker } from '../quickpicks/modePicker';
+import { command } from '../system/-webview/command';
+import { configuration } from '../system/-webview/configuration';
+import { log } from '../system/decorators/log';
+import { getLogScope, setLogScopeExit } from '../system/logger.scope';
+import { GlCommandBase } from './commandBase';
 
 @command()
-export class SwitchModeCommand extends Command {
+export class SwitchModeCommand extends GlCommandBase {
 	constructor(private readonly container: Container) {
-		super(Commands.SwitchMode);
+		super('gitlens.switchMode');
 	}
 
 	@log({ args: false, scoped: true, singleLine: true, timed: false })
-	async execute() {
+	async execute(): Promise<void> {
 		const scope = getLogScope();
 
-		const pick = await ModePicker.show();
+		const pick = await showModePicker();
 		if (pick === undefined) return;
 
-		if (scope != null) {
-			scope.exitDetails = ` \u2014 mode=${pick.key ?? ''}`;
-		}
+		setLogScopeExit(scope, ` \u2022 mode=${pick.key ?? ''}`);
 
 		const active = configuration.get('mode.active');
 		if (active === pick.key) return;
@@ -44,13 +42,13 @@ export class SwitchModeCommand extends Command {
 }
 
 @command()
-export class ToggleReviewModeCommand extends Command {
+export class ToggleReviewModeCommand extends GlCommandBase {
 	constructor(private readonly container: Container) {
-		super(Commands.ToggleReviewMode);
+		super('gitlens.toggleReviewMode');
 	}
 
 	@log({ args: false, singleLine: true, timed: false })
-	async execute() {
+	async execute(): Promise<void> {
 		const modes = configuration.get('modes');
 		if (modes == null || !Object.keys(modes).includes('review')) return;
 
@@ -60,13 +58,13 @@ export class ToggleReviewModeCommand extends Command {
 }
 
 @command()
-export class ToggleZenModeCommand extends Command {
+export class ToggleZenModeCommand extends GlCommandBase {
 	constructor(private readonly container: Container) {
-		super(Commands.ToggleZenMode);
+		super('gitlens.toggleZenMode');
 	}
 
 	@log({ args: false, singleLine: true, timed: false })
-	async execute() {
+	async execute(): Promise<void> {
 		const modes = configuration.get('modes');
 		if (modes == null || !Object.keys(modes).includes('zen')) return;
 

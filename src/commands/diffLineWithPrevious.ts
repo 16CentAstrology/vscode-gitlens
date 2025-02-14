@@ -1,12 +1,14 @@
 import type { TextDocumentShowOptions, TextEditor, Uri } from 'vscode';
-import { Commands } from '../constants';
+import { GlCommand } from '../constants.commands';
 import type { Container } from '../container';
 import { GitUri } from '../git/gitUri';
 import type { GitCommit } from '../git/models/commit';
-import { Logger } from '../logger';
 import { showCommitHasNoPreviousCommitWarningMessage, showGenericErrorMessage } from '../messages';
-import { command, executeCommand } from '../system/command';
-import { ActiveEditorCommand, getCommandUri } from './base';
+import { command, executeCommand } from '../system/-webview/command';
+import { Logger } from '../system/logger';
+import { ActiveEditorCommand } from './commandBase';
+import { getCommandUri } from './commandBase.utils';
+import type { CommandContext } from './commandContext';
 import type { DiffWithCommandArgs } from './diffWith';
 
 export interface DiffLineWithPreviousCommandArgs {
@@ -19,7 +21,15 @@ export interface DiffLineWithPreviousCommandArgs {
 @command()
 export class DiffLineWithPreviousCommand extends ActiveEditorCommand {
 	constructor(private readonly container: Container) {
-		super(Commands.DiffLineWithPrevious);
+		super(GlCommand.DiffLineWithPrevious);
+	}
+
+	protected override preExecute(context: CommandContext, args?: DiffLineWithPreviousCommandArgs): Promise<any> {
+		if (context.type === 'editorLine') {
+			args = { ...args, line: context.line };
+		}
+
+		return this.execute(context.editor, context.uri, args);
 	}
 
 	async execute(editor?: TextEditor, uri?: Uri, args?: DiffLineWithPreviousCommandArgs): Promise<any> {
@@ -34,20 +44,17 @@ export class DiffLineWithPreviousCommand extends ActiveEditorCommand {
 		const gitUri = args.commit?.getGitUri() ?? (await GitUri.fromUri(uri));
 
 		try {
-			const diffUris = await this.container.git.getPreviousComparisonUrisForLine(
-				gitUri.repoPath!,
-				gitUri,
-				args.line,
-				gitUri.sha,
-			);
+			const diffUris = await this.container.git
+				.diff(gitUri.repoPath!)
+				.getPreviousComparisonUrisForLine(gitUri, args.line, gitUri.sha);
 
-			if (diffUris == null || diffUris.previous == null) {
+			if (diffUris?.previous == null) {
 				void showCommitHasNoPreviousCommitWarningMessage();
 
 				return;
 			}
 
-			void (await executeCommand<DiffWithCommandArgs>(Commands.DiffWith, {
+			void (await executeCommand<DiffWithCommandArgs>(GlCommand.DiffWith, {
 				repoPath: diffUris.current.repoPath,
 				lhs: {
 					sha: diffUris.previous.sha ?? '',

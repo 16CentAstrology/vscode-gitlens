@@ -1,33 +1,36 @@
 import type { Uri } from 'vscode';
 import type { ScmResource } from '../@types/vscode.git.resources';
-import { ScmResourceGroupType } from '../@types/vscode.git.resources.enums';
-import { GitActions } from '../commands/gitCommands.actions';
-import { Commands } from '../constants';
+import { ScmResourceGroupType, ScmStatus } from '../@types/vscode.git.resources.enums';
 import type { Container } from '../container';
+import { Features } from '../features';
+import { push } from '../git/actions/stash';
 import { GitUri } from '../git/gitUri';
-import { command } from '../system/command';
-import type { CommandContext } from './base';
+import { command } from '../system/-webview/command';
+import { GlCommandBase } from './commandBase';
+import type { CommandContext } from './commandContext';
 import {
-	Command,
 	isCommandContextViewNodeHasFile,
 	isCommandContextViewNodeHasRepoPath,
 	isCommandContextViewNodeHasRepository,
-} from './base';
+} from './commandContext.utils';
 
 export interface StashSaveCommandArgs {
 	message?: string;
 	repoPath?: string;
 	uris?: Uri[];
+	includeUntracked?: boolean;
 	keepStaged?: boolean;
+	onlyStaged?: boolean;
+	onlyStagedUris?: Uri[];
 }
 
 @command()
-export class StashSaveCommand extends Command {
+export class StashSaveCommand extends GlCommandBase {
 	constructor(private readonly container: Container) {
-		super([Commands.StashSave, Commands.StashSaveFiles]);
+		super(['gitlens.stashSave', 'gitlens.stashSaveFiles']);
 	}
 
-	protected override async preExecute(context: CommandContext, args?: StashSaveCommandArgs) {
+	protected override async preExecute(context: CommandContext, args?: StashSaveCommandArgs): Promise<void> {
 		if (isCommandContextViewNodeHasFile(context)) {
 			args = { ...args };
 			args.repoPath = context.node.file.repoPath ?? context.node.repoPath;
@@ -38,41 +41,106 @@ export class StashSaveCommand extends Command {
 		} else if (isCommandContextViewNodeHasRepoPath(context)) {
 			args = { ...args };
 			args.repoPath = context.node.repoPath;
-		} else if (context.type === 'scm-states') {
-			args = { ...args };
-			args.uris = context.scmResourceStates.map(s => s.resourceUri);
-			args.repoPath = (await this.container.git.getOrOpenRepository(args.uris[0]))?.path;
-
-			const status = await this.container.git.getStatusForRepo(args.repoPath);
-			if (status?.computeWorkingTreeStatus().staged) {
-				if (
-					!context.scmResourceStates.some(
-						s => (s as ScmResource).resourceGroupType === ScmResourceGroupType.Index,
-					)
-				) {
-					args.keepStaged = true;
+		} else if (context.type === 'scm') {
+			if (context.scm.rootUri != null) {
+				const repo = this.container.git.getRepository(context.scm.rootUri);
+				if (repo != null) {
+					args = { ...args };
+					args.repoPath = repo.path;
 				}
 			}
+		} else if (context.type === 'scm-states') {
+			args = { ...args };
+
+			let hasOnlyStaged = undefined;
+			let hasStaged = false;
+			let hasUntracked = false;
+
+			const uris: Uri[] = [];
+
+			for (const resource of context.scmResourceStates as ScmResource[]) {
+				uris.push(resource.resourceUri);
+				if (resource.type === ScmStatus.UNTRACKED) {
+					hasUntracked = true;
+				}
+
+				if (resource.resourceGroupType === ScmResourceGroupType.Index) {
+					hasStaged = true;
+					if (hasOnlyStaged == null) {
+						hasOnlyStaged = true;
+					}
+				} else {
+					hasOnlyStaged = false;
+				}
+			}
+
+			const repo = await this.container.git.getOrOpenRepository(uris[0]);
+
+			args.repoPath = repo?.path;
+			args.onlyStaged = repo != null && hasOnlyStaged ? await repo.git.supports(Features.StashOnlyStaged) : false;
+			if (args.keepStaged == null && !hasStaged) {
+				args.keepStaged = true;
+			}
+			args.includeUntracked = hasUntracked;
+
+			args.uris = uris;
 		} else if (context.type === 'scm-groups') {
 			args = { ...args };
-			args.uris = context.scmResourceGroups.reduce<Uri[]>(
-				(a, b) => a.concat(b.resourceStates.map(s => s.resourceUri)),
-				[],
-			);
-			args.repoPath = (await this.container.git.getOrOpenRepository(args.uris[0]))?.path;
 
-			const status = await this.container.git.getStatusForRepo(args.repoPath);
-			if (status?.computeWorkingTreeStatus().staged) {
-				if (!context.scmResourceGroups.some(g => g.id === 'index')) {
-					args.keepStaged = true;
+			let hasOnlyStaged = undefined;
+			let hasStaged = false;
+			let hasUntracked = false;
+
+			const uris: Uri[] = [];
+			const stagedUris: Uri[] = [];
+
+			for (const group of context.scmResourceGroups) {
+				for (const resource of group.resourceStates as ScmResource[]) {
+					uris.push(resource.resourceUri);
+					if (resource.type === ScmStatus.UNTRACKED) {
+						hasUntracked = true;
+					}
 				}
+
+				if (group.id === 'index') {
+					hasStaged = true;
+					if (hasOnlyStaged == null) {
+						hasOnlyStaged = true;
+					}
+					stagedUris.push(...group.resourceStates.map(s => s.resourceUri));
+				} else {
+					hasOnlyStaged = false;
+				}
+			}
+
+			const repo = await this.container.git.getOrOpenRepository(uris[0]);
+
+			args.repoPath = repo?.path;
+			args.onlyStaged = repo != null && hasOnlyStaged ? await repo.git.supports(Features.StashOnlyStaged) : false;
+			if (args.keepStaged == null && !hasStaged) {
+				args.keepStaged = true;
+			}
+			args.includeUntracked = hasUntracked;
+
+			if (args.onlyStaged) {
+				args.onlyStagedUris = stagedUris;
+			} else {
+				args.uris = uris;
 			}
 		}
 
 		return this.execute(args);
 	}
 
-	execute(args?: StashSaveCommandArgs) {
-		return GitActions.Stash.push(args?.repoPath, args?.uris, args?.message, args?.keepStaged);
+	execute(args?: StashSaveCommandArgs): Promise<void> {
+		return push(
+			args?.repoPath,
+			args?.uris,
+			args?.message,
+			args?.includeUntracked,
+			args?.keepStaged,
+			args?.onlyStaged,
+			args?.onlyStagedUris,
+		);
 	}
 }

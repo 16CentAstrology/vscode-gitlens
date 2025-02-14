@@ -1,48 +1,89 @@
-import { attr, css, customElement, FASTElement, html } from '@microsoft/fast-element';
+import { css, html, LitElement, nothing } from 'lit';
+import { customElement, property, query } from 'lit/decorators.js';
+import { focusOutline } from '../styles/lit/a11y.css';
+import '../overlays/tooltip';
+import '../code-icon';
 
-const template = html<ActionItem>`<a
-	role="${x => (!x.href ? 'button' : null)}"
-	type="${x => (!x.href ? 'button' : null)}"
-	aria-label="${x => x.label}"
-	title="${x => x.label}"
-	><code-icon icon="${x => x.icon}"></code-icon
-></a>`;
+@customElement('action-item')
+export class ActionItem extends LitElement {
+	static override shadowRootOptions: ShadowRootInit = {
+		...LitElement.shadowRootOptions,
+		delegatesFocus: true,
+	};
 
-const styles = css`
-	:host {
-		box-sizing: border-box;
-		display: inline-flex;
-		justify-content: center;
-		align-items: center;
-		width: 2rem;
-		height: 2rem;
-		border-radius: 0.5rem;
-		color: inherit;
-		padding: 0.2rem;
-		vertical-align: text-bottom;
-		text-decoration: none;
-		cursor: pointer;
-	}
-	:host(:focus) {
-		outline: 1px solid var(--vscode-focusBorder);
-		outline-offset: -1px;
-	}
-	:host(:hover) {
-		background-color: var(--vscode-toolbar-hoverBackground);
-	}
-	:host(:active) {
-		background-color: var(--vscode-toolbar-activeBackground);
-	}
-`;
+	static override styles = css`
+		:host {
+			box-sizing: border-box;
+			display: inline-flex;
+			justify-content: center;
+			align-items: center;
+			width: 2rem;
+			height: 2rem;
+			border-radius: 0.5rem;
+			color: inherit;
+			padding: 0.2rem;
+			vertical-align: text-bottom;
+			text-decoration: none;
+			cursor: pointer;
+		}
 
-@customElement({ name: 'action-item', template: template, styles: styles })
-export class ActionItem extends FASTElement {
-	@attr
+		:host(:focus-within) {
+			${focusOutline}
+		}
+
+		:host(:hover) {
+			background-color: var(--vscode-toolbar-hoverBackground);
+		}
+
+		:host(:active) {
+			background-color: var(--vscode-toolbar-activeBackground);
+		}
+
+		:host([disabled]) {
+			pointer-events: none;
+			opacity: 0.5;
+		}
+
+		a {
+			color: inherit;
+		}
+		a:focus {
+			outline: none;
+		}
+	`;
+
+	@property()
 	href?: string;
 
-	@attr
-	label: string = '';
+	@property()
+	label?: string;
 
-	@attr
-	icon: string = '';
+	@property()
+	icon = '';
+
+	@property({ type: Boolean })
+	disabled = false;
+
+	@query('a')
+	private defaultFocusEl!: HTMLAnchorElement;
+
+	override render(): unknown {
+		return html`
+			<gl-tooltip hoist content="${this.label ?? nothing}">
+				<a
+					role="${!this.href ? 'button' : nothing}"
+					type="${!this.href ? 'button' : nothing}"
+					aria-label="${this.label ?? nothing}"
+					?disabled=${this.disabled}
+					href=${this.href ?? nothing}
+				>
+					<code-icon icon="${this.icon}"></code-icon>
+				</a>
+			</gl-tooltip>
+		`;
+	}
+
+	override focus(options?: FocusOptions): void {
+		this.defaultFocusEl.focus(options);
+	}
 }

@@ -1,15 +1,18 @@
 import type { TextDocumentShowOptions, TextEditor, Uri } from 'vscode';
-import { Commands, GlyphChars, quickPickTitleMaxChars } from '../constants';
+import { GlyphChars, quickPickTitleMaxChars } from '../constants';
+import { GlCommand } from '../constants.commands';
 import type { Container } from '../container';
 import { GitUri } from '../git/gitUri';
-import { GitReference, GitRevision } from '../git/models/reference';
+import { isBranchReference } from '../git/utils/reference.utils';
+import { shortenRevision } from '../git/utils/revision.utils';
 import { showNoRepositoryWarningMessage } from '../messages';
-import { StashPicker } from '../quickpicks/commitPicker';
-import { ReferencePicker } from '../quickpicks/referencePicker';
-import { command, executeCommand } from '../system/command';
+import { showStashPicker } from '../quickpicks/commitPicker';
+import { showReferencePicker } from '../quickpicks/referencePicker';
+import { command, executeCommand } from '../system/-webview/command';
 import { basename } from '../system/path';
 import { pad } from '../system/string';
-import { ActiveEditorCommand, getCommandUri } from './base';
+import { ActiveEditorCommand } from './commandBase';
+import { getCommandUri } from './commandBase.utils';
 import type { DiffWithCommandArgs } from './diffWith';
 
 export interface DiffWithRevisionFromCommandArgs {
@@ -21,16 +24,16 @@ export interface DiffWithRevisionFromCommandArgs {
 @command()
 export class DiffWithRevisionFromCommand extends ActiveEditorCommand {
 	constructor(private readonly container: Container) {
-		super(Commands.DiffWithRevisionFrom);
+		super(GlCommand.DiffWithRevisionFrom);
 	}
 
-	async execute(editor?: TextEditor, uri?: Uri, args?: DiffWithRevisionFromCommandArgs) {
+	async execute(editor?: TextEditor, uri?: Uri, args?: DiffWithRevisionFromCommandArgs): Promise<void> {
 		uri = getCommandUri(uri, editor);
 		if (uri == null) return;
 
 		const gitUri = await GitUri.fromUri(uri);
 		if (!gitUri.repoPath) {
-			void showNoRepositoryWarningMessage('Unable to open file compare');
+			void showNoRepositoryWarningMessage('Unable to open file comparison');
 
 			return;
 		}
@@ -46,8 +49,8 @@ export class DiffWithRevisionFromCommand extends ActiveEditorCommand {
 		let sha;
 		if (args?.stash) {
 			const title = `Open Changes with Stash${pad(GlyphChars.Dot, 2, 2)}`;
-			const pick = await StashPicker.show(
-				this.container.git.getStash(gitUri.repoPath),
+			const pick = await showStashPicker(
+				this.container.git.stash(gitUri.repoPath)?.getStash(),
 				`${title}${gitUri.getFormattedFileName({ truncateTo: quickPickTitleMaxChars - title.length })}`,
 				'Choose a stash to compare with',
 				{
@@ -62,19 +65,18 @@ export class DiffWithRevisionFromCommand extends ActiveEditorCommand {
 			sha = ref;
 		} else {
 			const title = `Open Changes with Branch or Tag${pad(GlyphChars.Dot, 2, 2)}`;
-			const pick = await ReferencePicker.show(
+			const pick = await showReferencePicker(
 				gitUri.repoPath,
 				`${title}${gitUri.getFormattedFileName({ truncateTo: quickPickTitleMaxChars - title.length })}`,
-				'Choose a branch or tag to compare with',
+				'Choose a reference (branch, tag, etc) to compare with',
 				{
-					allowEnteringRefs: true,
-					// checkmarks: false,
+					allowRevisions: true,
 				},
 			);
 			if (pick == null) return;
 
 			ref = pick.ref;
-			sha = GitReference.isBranch(pick) && pick.remote ? `remotes/${ref}` : ref;
+			sha = isBranchReference(pick) && pick.remote ? `remotes/${ref}` : ref;
 		}
 
 		if (ref == null) return;
@@ -83,21 +85,23 @@ export class DiffWithRevisionFromCommand extends ActiveEditorCommand {
 		let renamedTitle: string | undefined;
 
 		// Check to see if this file has been renamed
-		const files = await this.container.git.getDiffStatus(gitUri.repoPath, 'HEAD', ref, { filters: ['R', 'C'] });
+		const files = await this.container.git
+			.diff(gitUri.repoPath)
+			.getDiffStatus('HEAD', ref, { filters: ['R', 'C'] });
 		if (files != null) {
 			const rename = files.find(s => s.path === path);
 			if (rename?.originalPath != null) {
 				renamedUri = this.container.git.getAbsoluteUri(rename.originalPath, gitUri.repoPath);
-				renamedTitle = `${basename(rename.originalPath)} (${GitRevision.shorten(ref)})`;
+				renamedTitle = `${basename(rename.originalPath)} (${shortenRevision(ref)})`;
 			}
 		}
 
-		void (await executeCommand<DiffWithCommandArgs>(Commands.DiffWith, {
+		void (await executeCommand<DiffWithCommandArgs>(GlCommand.DiffWith, {
 			repoPath: gitUri.repoPath,
 			lhs: {
 				sha: sha,
 				uri: renamedUri ?? gitUri,
-				title: renamedTitle ?? `${basename(gitUri.fsPath)} (${GitRevision.shorten(ref)})`,
+				title: renamedTitle ?? `${basename(gitUri.fsPath)} (${shortenRevision(ref)})`,
 			},
 			rhs: {
 				sha: '',

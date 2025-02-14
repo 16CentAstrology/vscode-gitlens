@@ -1,18 +1,31 @@
-import type { GraphRow, Head, Remote, RowContexts, Tag } from '@gitkraken/gitkraken-components';
+import type {
+	GraphRow,
+	Head,
+	HostingServiceType,
+	Remote,
+	RowContexts,
+	RowStats,
+	Tag,
+} from '@gitkraken/gitkraken-components';
+import type { GitBranch } from './branch';
+import type { GitStashCommit } from './commit';
 import type { GitRemote } from './remote';
+import type { GitWorktree } from './worktree';
+
+export type GitGraphHostingServiceType = HostingServiceType;
 
 export type GitGraphRowHead = Head;
 export type GitGraphRowRemoteHead = Remote;
 export type GitGraphRowTag = Tag;
 export type GitGraphRowContexts = RowContexts;
-export const enum GitGraphRowType {
-	Commit = 'commit-node',
-	MergeCommit = 'merge-node',
-	Stash = 'stash-node',
-	Working = 'work-dir-changes',
-	Conflict = 'merge-conflict-node',
-	Rebase = 'unsupported-rebase-warning-node',
-}
+export type GitGraphRowStats = RowStats;
+export type GitGraphRowType =
+	| 'commit-node'
+	| 'merge-node'
+	| 'stash-node'
+	| 'work-dir-changes'
+	| 'merge-conflict-node'
+	| 'unsupported-rebase-warning-node';
 
 export interface GitGraphRow extends GraphRow {
 	type: GitGraphRowType;
@@ -28,12 +41,24 @@ export interface GitGraph {
 	readonly avatars: Map<string, string>;
 	/** A set of all "seen" commit ids */
 	readonly ids: Set<string>;
-	/** A set of all skipped commit ids -- typically for stash index/untracked commits */
-	readonly skippedIds?: Set<string>;
+	readonly includes: { stats?: boolean } | undefined;
+	/** A set of all remapped commit ids -- typically for stash index/untracked commits
+	 * (key = remapped from id, value = remapped to id)
+	 */
+	readonly remappedIds?: Map<string, string>;
+	readonly branches: Map<string, GitBranch>;
 	readonly remotes: Map<string, GitRemote>;
+	readonly downstreams: Map<string, string[]>;
+	readonly stashes: Map<string, GitStashCommit> | undefined;
+	readonly worktrees: GitWorktree[] | undefined;
+	readonly worktreesByBranch: Map<string, GitWorktree> | undefined;
+
 	/** The rows for the set of commits requested */
 	readonly rows: GitGraphRow[];
 	readonly id?: string;
+
+	readonly rowsStats?: GitGraphRowsStats;
+	readonly rowsStatsDeferred?: { isLoaded: () => boolean; promise: Promise<void> };
 
 	readonly paging?: {
 		readonly limit: number | undefined;
@@ -43,3 +68,5 @@ export interface GitGraph {
 
 	more?(limit: number, id?: string): Promise<GitGraph | undefined>;
 }
+
+export type GitGraphRowsStats = Map<string, GitGraphRowStats>;

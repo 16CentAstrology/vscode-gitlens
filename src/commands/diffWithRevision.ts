@@ -1,15 +1,20 @@
 import type { TextDocumentShowOptions, TextEditor, Uri } from 'vscode';
-import { Commands, GlyphChars, quickPickTitleMaxChars } from '../constants';
+import { GlyphChars, quickPickTitleMaxChars } from '../constants';
+import { GlCommand } from '../constants.commands';
 import type { Container } from '../container';
 import { GitUri } from '../git/gitUri';
-import { GitRevision } from '../git/models/reference';
-import { Logger } from '../logger';
+import { shortenRevision } from '../git/utils/revision.utils';
 import { showGenericErrorMessage } from '../messages';
-import { CommitPicker } from '../quickpicks/commitPicker';
+import { showCommitPicker } from '../quickpicks/commitPicker';
 import { CommandQuickPickItem } from '../quickpicks/items/common';
-import { command, executeCommand } from '../system/command';
+import type { DirectiveQuickPickItem } from '../quickpicks/items/directive';
+import { createDirectiveQuickPickItem, Directive } from '../quickpicks/items/directive';
+import { command, executeCommand } from '../system/-webview/command';
+import { splitPath } from '../system/-webview/path';
+import { Logger } from '../system/logger';
 import { pad } from '../system/string';
-import { ActiveEditorCommand, getCommandUri } from './base';
+import { ActiveEditorCommand } from './commandBase';
+import { getCommandUri } from './commandBase.utils';
 import type { DiffWithCommandArgs } from './diffWith';
 import type { DiffWithRevisionFromCommandArgs } from './diffWithRevisionFrom';
 
@@ -21,7 +26,7 @@ export interface DiffWithRevisionCommandArgs {
 @command()
 export class DiffWithRevisionCommand extends ActiveEditorCommand {
 	constructor(private readonly container: Container) {
-		super(Commands.DiffWithRevision);
+		super(GlCommand.DiffWithRevision);
 	}
 
 	async execute(editor?: TextEditor, uri?: Uri, args?: DiffWithRevisionCommandArgs): Promise<any> {
@@ -36,29 +41,76 @@ export class DiffWithRevisionCommand extends ActiveEditorCommand {
 		}
 
 		try {
-			const log = this.container.git
-				.getLogForFile(gitUri.repoPath, gitUri.fsPath)
+			const commitsProvider = this.container.git.commits(gitUri.repoPath!);
+			const log = commitsProvider
+				.getLogForFile(gitUri.fsPath)
 				.then(
-					log =>
-						log ??
-						(gitUri.sha
-							? this.container.git.getLogForFile(gitUri.repoPath, gitUri.fsPath, { ref: gitUri.sha })
-							: undefined),
+					log => log ?? (gitUri.sha ? commitsProvider.getLogForFile(gitUri.fsPath, gitUri.sha) : undefined),
 				);
 
 			const title = `Open Changes with Revision${pad(GlyphChars.Dot, 2, 2)}`;
-			const pick = await CommitPicker.show(
-				log,
-				`${title}${gitUri.getFormattedFileName({
-					suffix: gitUri.sha ? `:${GitRevision.shorten(gitUri.sha)}` : undefined,
-					truncateTo: quickPickTitleMaxChars - title.length,
-				})}`,
-				'Choose a commit to compare with',
-				{
-					picked: gitUri.sha,
+			const titleWithContext = `${title}${gitUri.getFormattedFileName({
+				suffix: gitUri.sha ? `:${shortenRevision(gitUri.sha)}` : undefined,
+				truncateTo: quickPickTitleMaxChars - title.length,
+			})}`;
+			const pick = await showCommitPicker(log, titleWithContext, 'Choose a commit to compare with', {
+				empty: !gitUri.sha
+					? {
+							getState: async () => {
+								const items: (CommandQuickPickItem | DirectiveQuickPickItem)[] = [];
+
+								const status = await this.container.git.status(gitUri.repoPath!).getStatus();
+								if (status != null) {
+									for (const f of status.files) {
+										if (f.workingTreeStatus === '?' || f.workingTreeStatus === '!') {
+											continue;
+										}
+
+										const [label, description] = splitPath(f.path, undefined, true);
+
+										items.push(
+											new CommandQuickPickItem<[Uri]>(
+												{
+													label: label,
+													description: description,
+												},
+												undefined,
+												GlCommand.DiffWithRevision,
+												[this.container.git.getAbsoluteUri(f.path, gitUri.repoPath)],
+											),
+										);
+									}
+								}
+
+								let newPlaceholder;
+								let newTitle;
+
+								if (items.length) {
+									newPlaceholder = `${gitUri.getFormattedFileName()} is likely untracked, choose a different file?`;
+									newTitle = `${titleWithContext} (Untracked?)`;
+								} else {
+									newPlaceholder = 'No commits found';
+								}
+
+								items.push(
+									createDirectiveQuickPickItem(Directive.Cancel, undefined, {
+										label: items.length ? 'Cancel' : 'OK',
+									}),
+								);
+
+								return {
+									items: items,
+									placeholder: newPlaceholder,
+									title: newTitle,
+								};
+							},
+					  }
+					: undefined,
+				picked: gitUri.sha,
+				keyboard: {
 					keys: ['right', 'alt+right', 'ctrl+right'],
-					onDidPressKey: async (key, item) => {
-						void (await executeCommand<DiffWithCommandArgs>(Commands.DiffWith, {
+					onDidPressKey: async (_key, item) => {
+						await executeCommand<DiffWithCommandArgs>(GlCommand.DiffWith, {
 							repoPath: gitUri.repoPath,
 							lhs: {
 								sha: item.item.ref,
@@ -68,23 +120,27 @@ export class DiffWithRevisionCommand extends ActiveEditorCommand {
 								sha: '',
 								uri: gitUri,
 							},
-							line: args!.line,
-							showOptions: args!.showOptions,
-						}));
+							line: args.line,
+							showOptions: args.showOptions,
+						});
 					},
-					showOtherReferences: [
-						CommandQuickPickItem.fromCommand('Choose a Branch or Tag...', Commands.DiffWithRevisionFrom),
-						CommandQuickPickItem.fromCommand<DiffWithRevisionFromCommandArgs>(
-							'Choose a Stash...',
-							Commands.DiffWithRevisionFrom,
-							{ stash: true },
-						),
-					],
 				},
-			);
+				showOtherReferences: [
+					CommandQuickPickItem.fromCommand<[Uri]>(
+						'Choose a Branch or Tag...',
+						GlCommand.DiffWithRevisionFrom,
+						[uri],
+					),
+					CommandQuickPickItem.fromCommand<[Uri, DiffWithRevisionFromCommandArgs]>(
+						'Choose a Stash...',
+						GlCommand.DiffWithRevisionFrom,
+						[uri, { stash: true }],
+					),
+				],
+			});
 			if (pick == null) return;
 
-			void (await executeCommand<DiffWithCommandArgs>(Commands.DiffWith, {
+			void (await executeCommand<DiffWithCommandArgs>(GlCommand.DiffWith, {
 				repoPath: gitUri.repoPath,
 				lhs: {
 					sha: pick.ref,

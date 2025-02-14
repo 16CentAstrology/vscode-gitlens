@@ -1,157 +1,192 @@
-import { ColorThemeKind, ThemeColor, ThemeIcon, window } from 'vscode';
-import { DateStyle } from '../../configuration';
-import { Colors } from '../../constants';
+/* eslint-disable @typescript-eslint/no-restricted-imports */ /* TODO need to deal with sharing rich class shapes to webviews */
 import { Container } from '../../container';
 import { formatDate, fromNow } from '../../system/date';
-import { memoize } from '../../system/decorators/memoize';
-import type { IssueOrPullRequest } from './issue';
-import { IssueOrPullRequestType } from './issue';
-import type { RemoteProviderReference } from './remoteProvider';
+import { memoize } from '../../system/decorators/-webview/memoize';
+import type { IssueProject, IssueRepository } from './issue';
+import type { IssueOrPullRequest, IssueOrPullRequestState as PullRequestState } from './issueOrPullRequest';
+import type { ProviderReference } from './remoteProvider';
+import type { RepositoryIdentityDescriptor } from './repositoryIdentities';
 
-export const enum PullRequestState {
-	Open = 'Open',
-	Closed = 'Closed',
-	Merged = 'Merged',
+export type { PullRequestState };
+
+export function isPullRequest(pr: unknown): pr is PullRequest {
+	return pr instanceof PullRequest;
 }
 
 export interface PullRequestShape extends IssueOrPullRequest {
-	readonly author: {
-		readonly name: string;
-		readonly avatarUrl: string;
-		readonly url: string;
-	};
-	readonly state: PullRequestState;
+	readonly author: PullRequestMember;
 	readonly mergedDate?: Date;
-}
-
-export function serializePullRequest(value: PullRequest): PullRequestShape {
-	const serialized: PullRequestShape = {
-		type: value.type,
-		provider: {
-			id: value.provider.id,
-			name: value.provider.name,
-			domain: value.provider.domain,
-			icon: value.provider.icon,
-		},
-		id: value.id,
-		title: value.title,
-		url: value.url,
-		date: value.date,
-		closedDate: value.closedDate,
-		closed: value.closed,
-		author: {
-			name: value.author.name,
-			avatarUrl: value.author.avatarUrl,
-			url: value.author.url,
-		},
-		state: value.state,
-		mergedDate: value.mergedDate,
-	};
-	return serialized;
+	readonly refs?: PullRequestRefs;
+	readonly isDraft?: boolean;
+	readonly additions?: number;
+	readonly deletions?: number;
+	readonly mergeableState?: PullRequestMergeableState;
+	readonly reviewDecision?: PullRequestReviewDecision;
+	readonly reviewRequests?: PullRequestReviewer[];
+	readonly assignees?: PullRequestMember[];
+	readonly project?: IssueProject;
 }
 
 export class PullRequest implements PullRequestShape {
-	static is(pr: any): pr is PullRequest {
-		return pr instanceof PullRequest;
-	}
-
-	static getMarkdownIcon(pullRequest: PullRequest): string {
-		switch (pullRequest.state) {
-			case PullRequestState.Open:
-				return `<span style="color:${
-					window.activeColorTheme.kind === ColorThemeKind.Dark ? '#3fb950' : '#1a7f37'
-				};">$(git-pull-request)</span>`;
-			case PullRequestState.Closed:
-				return `<span style="color:${
-					window.activeColorTheme.kind === ColorThemeKind.Dark ? '#f85149' : '#cf222e'
-				};">$(git-pull-request-closed)</span>`;
-			case PullRequestState.Merged:
-				return `<span style="color:${
-					window.activeColorTheme.kind === ColorThemeKind.Dark ? '#a371f7' : '#8250df'
-				};">$(git-merge)</span>`;
-			default:
-				return '$(git-pull-request)';
-		}
-	}
-
-	static getThemeIcon(pullRequest: PullRequest): ThemeIcon {
-		switch (pullRequest.state) {
-			case PullRequestState.Open:
-				return new ThemeIcon('git-pull-request', new ThemeColor(Colors.OpenPullRequestIconColor));
-			case PullRequestState.Closed:
-				return new ThemeIcon('git-pull-request-closed', new ThemeColor(Colors.ClosedPullRequestIconColor));
-			case PullRequestState.Merged:
-				return new ThemeIcon('git-merge', new ThemeColor(Colors.MergedPullRequestIconColor));
-			default:
-				return new ThemeIcon('git-pull-request');
-		}
-	}
-
-	readonly type = IssueOrPullRequestType.PullRequest;
+	readonly type = 'pullrequest';
 
 	constructor(
-		public readonly provider: RemoteProviderReference,
-		public readonly author: {
-			readonly name: string;
-			readonly avatarUrl: string;
-			readonly url: string;
-		},
+		public readonly provider: ProviderReference,
+		public readonly author: PullRequestMember,
 		public readonly id: string,
+		public readonly nodeId: string | undefined,
 		public readonly title: string,
 		public readonly url: string,
+		public readonly repository: IssueRepository,
 		public readonly state: PullRequestState,
-		public readonly date: Date,
+		public readonly createdDate: Date,
+		public readonly updatedDate: Date,
 		public readonly closedDate?: Date,
 		public readonly mergedDate?: Date,
+		public readonly mergeableState?: PullRequestMergeableState,
+		public readonly viewerCanUpdate?: boolean,
+		public readonly refs?: PullRequestRefs,
+		public readonly isDraft?: boolean,
+		public readonly additions?: number,
+		public readonly deletions?: number,
+		public readonly commentsCount?: number,
+		public readonly thumbsUpCount?: number,
+		public readonly reviewDecision?: PullRequestReviewDecision,
+		public readonly reviewRequests?: PullRequestReviewer[],
+		public readonly latestReviews?: PullRequestReviewer[],
+		public readonly assignees?: PullRequestMember[],
+		public readonly statusCheckRollupState?: PullRequestStatusCheckRollupState,
+		public readonly project?: IssueProject,
 	) {}
 
 	get closed(): boolean {
-		return this.state === PullRequestState.Closed;
+		return this.state === 'closed';
 	}
 
 	get formattedDate(): string {
-		return Container.instance.PullRequestDateFormatting.dateStyle === DateStyle.Absolute
+		return Container.instance.PullRequestDateFormatting.dateStyle === 'absolute'
 			? this.formatDate(Container.instance.PullRequestDateFormatting.dateFormat)
 			: this.formatDateFromNow();
 	}
 
 	@memoize<PullRequest['formatDate']>(format => format ?? 'MMMM Do, YYYY h:mma')
-	formatDate(format?: string | null) {
-		return formatDate(this.mergedDate ?? this.closedDate ?? this.date, format ?? 'MMMM Do, YYYY h:mma');
+	formatDate(format?: string | null): string {
+		return formatDate(this.mergedDate ?? this.closedDate ?? this.updatedDate, format ?? 'MMMM Do, YYYY h:mma');
 	}
 
-	formatDateFromNow() {
-		return fromNow(this.mergedDate ?? this.closedDate ?? this.date);
+	formatDateFromNow(): string {
+		return fromNow(this.mergedDate ?? this.closedDate ?? this.updatedDate);
 	}
 
 	@memoize<PullRequest['formatClosedDate']>(format => format ?? 'MMMM Do, YYYY h:mma')
-	formatClosedDate(format?: string | null) {
+	formatClosedDate(format?: string | null): string {
 		if (this.closedDate == null) return '';
 		return formatDate(this.closedDate, format ?? 'MMMM Do, YYYY h:mma');
 	}
 
-	formatClosedDateFromNow() {
+	formatClosedDateFromNow(): string {
 		if (this.closedDate == null) return '';
 		return fromNow(this.closedDate);
 	}
 
 	@memoize<PullRequest['formatMergedDate']>(format => format ?? 'MMMM Do, YYYY h:mma')
-	formatMergedDate(format?: string | null) {
+	formatMergedDate(format?: string | null): string {
 		if (this.mergedDate == null) return '';
 		return formatDate(this.mergedDate, format ?? 'MMMM Do, YYYY h:mma') ?? '';
 	}
 
-	formatMergedDateFromNow() {
+	formatMergedDateFromNow(): string {
 		if (this.mergedDate == null) return '';
 		return fromNow(this.mergedDate);
 	}
 
 	@memoize<PullRequest['formatUpdatedDate']>(format => format ?? 'MMMM Do, YYYY h:mma')
-	formatUpdatedDate(format?: string | null) {
-		return formatDate(this.date, format ?? 'MMMM Do, YYYY h:mma') ?? '';
+	formatUpdatedDate(format?: string | null): string {
+		return formatDate(this.updatedDate, format ?? 'MMMM Do, YYYY h:mma') ?? '';
 	}
 
-	formatUpdatedDateFromNow() {
-		return fromNow(this.date);
+	formatUpdatedDateFromNow(): string {
+		return fromNow(this.updatedDate);
 	}
+}
+
+export const enum PullRequestReviewDecision {
+	Approved = 'Approved',
+	ChangesRequested = 'ChangesRequested',
+	ReviewRequired = 'ReviewRequired',
+}
+
+export const enum PullRequestMergeableState {
+	Unknown = 'Unknown',
+	Mergeable = 'Mergeable',
+	Conflicting = 'Conflicting',
+	FailingChecks = 'FailingChecks',
+	BlockedByPolicy = 'BlockedByPolicy',
+}
+
+export const enum PullRequestStatusCheckRollupState {
+	Success = 'success',
+	Pending = 'pending',
+	Failed = 'failed',
+}
+
+export const enum PullRequestMergeMethod {
+	Merge = 'merge',
+	Squash = 'squash',
+	Rebase = 'rebase',
+}
+
+export const enum PullRequestReviewState {
+	Approved = 'APPROVED',
+	ChangesRequested = 'CHANGES_REQUESTED',
+	Commented = 'COMMENTED',
+	Dismissed = 'DISMISSED',
+	Pending = 'PENDING',
+	ReviewRequested = 'REVIEW_REQUESTED',
+}
+
+export interface PullRequestComparisonRefs {
+	repoPath: string;
+	base: { ref: string; label: string };
+	head: { ref: string; label: string };
+}
+
+export interface PullRequestMember {
+	id: string;
+	name: string;
+	avatarUrl?: string;
+	url?: string;
+}
+
+export interface PullRequestRef {
+	owner: string;
+	repo: string;
+	branch: string;
+	sha: string;
+	exists: boolean;
+	url: string;
+}
+
+export interface PullRequestRefs {
+	base: PullRequestRef;
+	head: PullRequestRef;
+	isCrossRepository: boolean;
+}
+
+export interface PullRequestReviewer {
+	isCodeOwner?: boolean;
+	reviewer: PullRequestMember;
+	state: PullRequestReviewState;
+}
+
+export type PullRequestRepositoryIdentityDescriptor = RequireSomeWithProps<
+	RequireSome<RepositoryIdentityDescriptor<string>, 'provider'>,
+	'provider',
+	'id' | 'domain' | 'repoDomain' | 'repoName'
+> &
+	RequireSomeWithProps<RequireSome<RepositoryIdentityDescriptor<string>, 'remote'>, 'remote', 'domain'>;
+
+export interface SearchedPullRequest {
+	pullRequest: PullRequest;
+	reasons: string[];
 }

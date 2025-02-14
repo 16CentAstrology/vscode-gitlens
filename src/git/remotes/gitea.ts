@@ -1,9 +1,9 @@
 import type { Range, Uri } from 'vscode';
-import type { DynamicAutolinkReference } from '../../annotations/autolinks';
-import type { AutolinkReference } from '../../config';
-import { AutolinkType } from '../../config';
-import { GitRevision } from '../models/reference';
+import type { AutolinkReference, DynamicAutolinkReference } from '../../autolinks/models/autolinks';
 import type { Repository } from '../models/repository';
+import type { GkProviderId } from '../models/repositoryIdentities';
+import { isSha } from '../utils/revision.utils';
+import type { RemoteProviderId } from './remoteProvider';
 import { RemoteProvider } from './remoteProvider';
 
 const fileRegex = /^\/([^/]+)\/([^/]+?)\/src(.+)$/i;
@@ -14,16 +14,23 @@ export class GiteaRemote extends RemoteProvider {
 		super(domain, path, protocol, name, custom);
 	}
 
+	protected override get issueLinkPattern(): string {
+		return `${this.baseUrl}/issues/<num>`;
+	}
+
 	private _autolinks: (AutolinkReference | DynamicAutolinkReference)[] | undefined;
 	override get autolinks(): (AutolinkReference | DynamicAutolinkReference)[] {
 		if (this._autolinks === undefined) {
 			this._autolinks = [
+				...super.autolinks,
 				{
 					prefix: '#',
-					url: `${this.baseUrl}/issues/<num>`,
+					url: this.issueLinkPattern,
+					alphanumeric: false,
+					ignoreCase: false,
 					title: `Open Issue #<num> on ${this.name}`,
 
-					type: AutolinkType.Issue,
+					type: 'issue',
 					description: `${this.name} Issue #<num>`,
 				},
 			];
@@ -31,15 +38,19 @@ export class GiteaRemote extends RemoteProvider {
 		return this._autolinks;
 	}
 
-	override get icon() {
+	override get icon(): string {
 		return 'gitea';
 	}
 
-	get id() {
+	get id(): RemoteProviderId {
 		return 'gitea';
 	}
 
-	get name() {
+	get gkProviderId(): GkProviderId | undefined {
+		return undefined; // TODO@eamodio DRAFTS add this when supported by backend
+	}
+
+	get name(): string {
 		return this.formatName('Gitea');
 	}
 
@@ -79,8 +90,8 @@ export class GiteaRemote extends RemoteProvider {
 			index = path.indexOf('/', offset);
 			if (index !== -1) {
 				const sha = path.substring(offset, index);
-				if (GitRevision.isSha(sha)) {
-					const uri = repository.toAbsoluteUri(path.substr(index), { validate: options?.validate });
+				if (isSha(sha)) {
+					const uri = repository.toAbsoluteUri(path.substring(index), { validate: options?.validate });
 					if (uri != null) return { uri: uri, startLine: startLine, endLine: endLine };
 				}
 			}
@@ -94,13 +105,13 @@ export class GiteaRemote extends RemoteProvider {
 			index = offset;
 			do {
 				branch = path.substring(offset, index);
-				possibleBranches.set(branch, path.substr(index));
+				possibleBranches.set(branch, path.substring(index));
 
 				index = path.indexOf('/', index + 1);
 			} while (index < path.length && index !== -1);
 
 			if (possibleBranches.size !== 0) {
-				const { values: branches } = await repository.getBranches({
+				const { values: branches } = await repository.git.branches().getBranches({
 					filter: b => b.remote && possibleBranches.has(b.getNameWithoutRemote()),
 				});
 				for (const branch of branches) {
@@ -144,9 +155,9 @@ export class GiteaRemote extends RemoteProvider {
 			line = '';
 		}
 
-		if (sha) return this.encodeUrl(`${this.baseUrl}/src/commit/${sha}/${fileName}${line}`);
-		if (branch) return this.encodeUrl(`${this.baseUrl}/src/branch/${branch}/${fileName}${line}`);
+		if (sha) return `${this.encodeUrl(`${this.baseUrl}/src/commit/${sha}/${fileName}`)}${line}`;
+		if (branch) return `${this.encodeUrl(`${this.baseUrl}/src/branch/${branch}/${fileName}`)}${line}`;
 		// this route is deprecated but there is no alternative
-		return this.encodeUrl(`${this.baseUrl}/src/${fileName}${line}`);
+		return `${this.encodeUrl(`${this.baseUrl}/src/${fileName}`)}${line}`;
 	}
 }

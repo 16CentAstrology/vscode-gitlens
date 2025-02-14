@@ -1,50 +1,38 @@
 import { TreeItem, TreeItemCollapsibleState } from 'vscode';
-import { ViewFilesLayout } from '../../configuration';
 import { GitUri } from '../../git/gitUri';
-import type { GitTrackingState } from '../../git/models/branch';
 import type { GitCommit } from '../../git/models/commit';
 import type { GitFileWithCommit } from '../../git/models/file';
 import type { GitLog } from '../../git/models/log';
-import type { GitStatus, GitStatusFile } from '../../git/models/status';
-import { groupBy, makeHierarchical } from '../../system/array';
-import { filter, flatMap, map } from '../../system/iterable';
+import type { GitStatus } from '../../git/models/status';
+import type { GitStatusFile } from '../../git/models/statusFile';
+import { makeHierarchical } from '../../system/array';
+import { filter, flatMap, groupBy, map } from '../../system/iterable';
 import { joinPaths, normalizePath } from '../../system/path';
 import { pluralize, sortCompare } from '../../system/string';
-import type { RepositoriesView } from '../repositoriesView';
-import { WorktreesView } from '../worktreesView';
+import type { ViewsWithWorkingTree } from '../viewBase';
+import { ContextValues, getViewNodeId, ViewNode } from './abstract/viewNode';
 import type { FileNode } from './folderNode';
 import { FolderNode } from './folderNode';
-import { RepositoryNode } from './repositoryNode';
 import { StatusFileNode } from './statusFileNode';
-import { ContextValues, ViewNode } from './viewNode';
 
-export class StatusFilesNode extends ViewNode<RepositoriesView | WorktreesView> {
-	static key = ':status-files';
-	static getId(repoPath: string): string {
-		return `${RepositoryNode.getId(repoPath)}${this.key}`;
-	}
-
-	readonly repoPath: string;
-
+export class StatusFilesNode extends ViewNode<'status-files', ViewsWithWorkingTree> {
 	constructor(
-		view: RepositoriesView | WorktreesView,
-		parent: ViewNode,
-		public readonly status:
-			| GitStatus
-			| {
-					readonly repoPath: string;
-					readonly files: GitStatusFile[];
-					readonly state: GitTrackingState;
-					readonly upstream?: string;
-			  },
+		view: ViewsWithWorkingTree,
+		protected override readonly parent: ViewNode,
+		public readonly status: GitStatus,
 		public readonly range: string | undefined,
 	) {
-		super(GitUri.fromRepoPath(status.repoPath), view, parent);
-		this.repoPath = status.repoPath;
+		super('status-files', GitUri.fromRepoPath(status.repoPath), view, parent);
+
+		this._uniqueId = getViewNodeId(this.type, this.context);
 	}
 
 	override get id(): string {
-		return StatusFilesNode.getId(this.repoPath);
+		return this._uniqueId;
+	}
+
+	get repoPath(): string {
+		return this.status.repoPath;
 	}
 
 	async getChildren(): Promise<ViewNode[]> {
@@ -54,7 +42,7 @@ export class StatusFilesNode extends ViewNode<RepositoriesView | WorktreesView> 
 
 		let log: GitLog | undefined;
 		if (this.range != null) {
-			log = await this.view.container.git.getLog(repoPath, { limit: 0, ref: this.range });
+			log = await this.view.container.git.commits(repoPath).getLog(this.range, { limit: 0 });
 			if (log != null) {
 				await Promise.allSettled(
 					map(
@@ -72,13 +60,8 @@ export class StatusFilesNode extends ViewNode<RepositoriesView | WorktreesView> 
 			}
 		}
 
-		if (
-			(this.view instanceof WorktreesView || this.view.config.includeWorkingTree) &&
-			this.status.files.length !== 0
-		) {
-			files.splice(
-				0,
-				0,
+		if ((this.view.type === 'worktrees' || this.view.config.includeWorkingTree) && this.status.files.length !== 0) {
+			files.unshift(
 				...flatMap(this.status.files, f =>
 					map(f.getPseudoCommits(this.view.container, undefined), c => this.getFileWithPseudoCommit(f, c)),
 				),
@@ -90,17 +73,10 @@ export class StatusFilesNode extends ViewNode<RepositoriesView | WorktreesView> 
 		const groups = groupBy(files, s => s.path);
 
 		let children: FileNode[] = Object.values(groups).map(
-			files =>
-				new StatusFileNode(
-					this.view,
-					this,
-					files[files.length - 1],
-					repoPath,
-					files.map(s => s.commit),
-				),
+			files => new StatusFileNode(this.view, this, repoPath, files, 'working'),
 		);
 
-		if (this.view.config.files.layout !== ViewFilesLayout.List) {
+		if (this.view.config.files.layout !== 'list') {
 			const hierarchy = makeHierarchical(
 				children,
 				n => n.uri.relativePath.split('/'),
@@ -108,7 +84,7 @@ export class StatusFilesNode extends ViewNode<RepositoriesView | WorktreesView> 
 				this.view.config.files.compact,
 			);
 
-			const root = new FolderNode(this.view, this, repoPath, '', hierarchy, true);
+			const root = new FolderNode(this.view, this, hierarchy, repoPath, '', undefined, true);
 			children = root.getChildren() as FileNode[];
 		} else {
 			children.sort((a, b) => a.priority - b.priority || sortCompare(a.label!, b.label!));
@@ -119,15 +95,14 @@ export class StatusFilesNode extends ViewNode<RepositoriesView | WorktreesView> 
 
 	async getTreeItem(): Promise<TreeItem> {
 		let files =
-			this.view instanceof WorktreesView || this.view.config.includeWorkingTree ? this.status.files.length : 0;
+			this.view.type === 'worktrees' || this.view.config.includeWorkingTree ? this.status.files.length : 0;
 
 		if (this.range != null) {
 			if (this.status.upstream != null && this.status.state.ahead > 0) {
 				if (files > 0) {
-					const aheadFiles = await this.view.container.git.getDiffStatus(
-						this.repoPath,
-						`${this.status.upstream}...`,
-					);
+					const aheadFiles = await this.view.container.git
+						.diff(this.repoPath)
+						.getDiffStatus(`${this.status.upstream?.name}...`);
 
 					if (aheadFiles != null) {
 						const uniques = new Set();
@@ -141,12 +116,11 @@ export class StatusFilesNode extends ViewNode<RepositoriesView | WorktreesView> 
 						files = uniques.size;
 					}
 				} else {
-					const stats = await this.view.container.git.getChangedFilesCount(
-						this.repoPath,
-						`${this.status.upstream}...`,
-					);
+					const stats = await this.view.container.git
+						.diff(this.repoPath)
+						.getChangedFilesCount(`${this.status.upstream?.name}...`);
 					if (stats != null) {
-						files += stats.changedFiles;
+						files += stats.files;
 					} else {
 						files = -1;
 					}
@@ -156,6 +130,7 @@ export class StatusFilesNode extends ViewNode<RepositoriesView | WorktreesView> 
 
 		const label = files === -1 ? '?? files changed' : `${pluralize('file', files)} changed`;
 		const item = new TreeItem(label, TreeItemCollapsibleState.Collapsed);
+		item.description = 'working tree';
 		item.id = this.id;
 		item.contextValue = ContextValues.StatusFiles;
 		item.iconPath = {
@@ -168,7 +143,12 @@ export class StatusFilesNode extends ViewNode<RepositoriesView | WorktreesView> 
 
 	private getFileWithPseudoCommit(file: GitStatusFile, commit: GitCommit): GitFileWithCommit {
 		return {
-			status: file.status,
+			status:
+				(commit.isUncommitted
+					? commit.isUncommittedStaged
+						? file.indexStatus
+						: file.workingTreeStatus
+					: file.status) ?? file.status,
 			repoPath: file.repoPath,
 			indexStatus: file.indexStatus,
 			workingTreeStatus: file.workingTreeStatus,

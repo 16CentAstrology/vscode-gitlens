@@ -1,21 +1,21 @@
 import type { TextEditor, Uri } from 'vscode';
 import { env } from 'vscode';
-import { Commands } from '../constants';
+import { GlCommand } from '../constants.commands';
 import type { Container } from '../container';
+import { copyMessageToClipboard } from '../git/actions/commit';
 import { GitUri } from '../git/gitUri';
-import { Logger } from '../logger';
 import { showGenericErrorMessage } from '../messages';
-import { command } from '../system/command';
+import { command } from '../system/-webview/command';
 import { first } from '../system/iterable';
-import type { CommandContext } from './base';
+import { Logger } from '../system/logger';
+import { ActiveEditorCommand } from './commandBase';
+import { getCommandUri } from './commandBase.utils';
+import type { CommandContext } from './commandContext';
 import {
-	ActiveEditorCommand,
-	getCommandUri,
 	isCommandContextViewNodeHasBranch,
 	isCommandContextViewNodeHasCommit,
 	isCommandContextViewNodeHasTag,
-} from './base';
-import { GitActions } from './gitCommands.actions';
+} from './commandContext.utils';
 
 export interface CopyMessageToClipboardCommandArgs {
 	message?: string;
@@ -26,10 +26,13 @@ export interface CopyMessageToClipboardCommandArgs {
 @command()
 export class CopyMessageToClipboardCommand extends ActiveEditorCommand {
 	constructor(private readonly container: Container) {
-		super(Commands.CopyMessageToClipboard);
+		super(GlCommand.CopyMessageToClipboard);
 	}
 
-	protected override async preExecute(context: CommandContext, args?: CopyMessageToClipboardCommandArgs) {
+	protected override async preExecute(
+		context: CommandContext,
+		args?: CopyMessageToClipboardCommandArgs,
+	): Promise<void> {
 		if (isCommandContextViewNodeHasCommit(context)) {
 			args = { ...args };
 			args.sha = context.node.commit.sha;
@@ -55,14 +58,14 @@ export class CopyMessageToClipboardCommand extends ActiveEditorCommand {
 		return this.execute(context.editor, context.uri, args);
 	}
 
-	async execute(editor?: TextEditor, uri?: Uri, args?: CopyMessageToClipboardCommandArgs) {
+	async execute(editor?: TextEditor, uri?: Uri, args?: CopyMessageToClipboardCommandArgs): Promise<void> {
 		uri = getCommandUri(uri, editor);
 		args = { ...args };
 
 		try {
 			if (!args.message) {
 				if (args.repoPath != null && args.sha != null) {
-					await GitActions.Commit.copyMessageToClipboard({ ref: args.sha, repoPath: args.repoPath });
+					await copyMessageToClipboard({ ref: args.sha, repoPath: args.repoPath });
 					return;
 				}
 
@@ -73,7 +76,7 @@ export class CopyMessageToClipboardCommand extends ActiveEditorCommand {
 					repoPath = this.container.git.getBestRepository(editor)?.path;
 					if (!repoPath) return;
 
-					const log = await this.container.git.getLog(repoPath, { limit: 1 });
+					const log = await this.container.git.commits(repoPath).getLog(undefined, { limit: 1 });
 					if (log == null) return;
 
 					const commit = first(log.commits.values());
@@ -83,6 +86,7 @@ export class CopyMessageToClipboardCommand extends ActiveEditorCommand {
 				} else if (args.message == null) {
 					const gitUri = await GitUri.fromUri(uri);
 					repoPath = gitUri.repoPath;
+					if (!repoPath) return;
 
 					if (args.sha == null) {
 						const blameline = editor?.selection.active.line ?? 0;
@@ -92,7 +96,7 @@ export class CopyMessageToClipboardCommand extends ActiveEditorCommand {
 							const blame = await this.container.git.getBlameForLine(gitUri, blameline, editor?.document);
 							if (blame == null || blame.commit.isUncommitted) return;
 
-							await GitActions.Commit.copyMessageToClipboard(blame.commit);
+							await copyMessageToClipboard(blame.commit);
 							return;
 						} catch (ex) {
 							Logger.error(ex, 'CopyMessageToClipboardCommand', `getBlameForLine(${blameline})`);
@@ -101,7 +105,7 @@ export class CopyMessageToClipboardCommand extends ActiveEditorCommand {
 							return;
 						}
 					} else {
-						await GitActions.Commit.copyMessageToClipboard({ ref: args.sha, repoPath: repoPath! });
+						await copyMessageToClipboard({ ref: args.sha, repoPath: repoPath });
 						return;
 					}
 				}

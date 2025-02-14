@@ -7,26 +7,25 @@ import type {
 } from 'vscode';
 import { ConfigurationTarget, Disposable, Position, Range, Uri, window, workspace, WorkspaceEdit } from 'vscode';
 import { getNonce } from '@env/crypto';
-import { ShowCommitsInViewCommand } from '../../commands';
-import { GitActions } from '../../commands/gitCommands.actions';
-import { configuration } from '../../configuration';
-import { ContextKeys, CoreCommands } from '../../constants';
+import { InspectCommand } from '../../commands/inspect';
 import type { Container } from '../../container';
-import { setContext } from '../../context';
 import { emojify } from '../../emojis';
 import type { GitCommit } from '../../git/models/commit';
-import { GitReference } from '../../git/models/reference';
 import { RepositoryChange, RepositoryChangeComparisonMode } from '../../git/models/repository';
-import { Logger } from '../../logger';
+import { createReference } from '../../git/utils/reference.utils';
 import { showRebaseSwitchToTextWarningMessage } from '../../messages';
-import { executeCoreCommand } from '../../system/command';
+import { executeCoreCommand } from '../../system/-webview/command';
+import { configuration } from '../../system/-webview/configuration';
+import { getScopedCounter } from '../../system/counter';
 import { debug, log } from '../../system/decorators/log';
 import type { Deferrable } from '../../system/function';
 import { debounce } from '../../system/function';
 import { join, map } from '../../system/iterable';
+import { Logger } from '../../system/logger';
 import { normalizePath } from '../../system/path';
 import type { IpcMessage, WebviewFocusChangedParams } from '../protocol';
-import { onIpc, WebviewFocusChangedCommandType } from '../protocol';
+import { WebviewFocusChangedCommand } from '../protocol';
+import { replaceWebviewHtmlTokens, resetContextKeys, setContextKeys } from '../webviewController';
 import type {
 	Author,
 	ChangeEntryParams,
@@ -38,41 +37,23 @@ import type {
 	UpdateSelectionParams,
 } from './protocol';
 import {
-	AbortCommandType,
-	ChangeEntryCommandType,
-	DidChangeNotificationType,
-	DisableCommandType,
-	MoveEntryCommandType,
-	ReorderCommandType,
-	SearchCommandType,
-	StartCommandType,
-	SwitchCommandType,
-	UpdateSelectionCommandType,
+	AbortCommand,
+	ChangeEntryCommand,
+	DidChangeNotification,
+	DisableCommand,
+	MoveEntryCommand,
+	ReorderCommand,
+	SearchCommand,
+	StartCommand,
+	SwitchCommand,
+	UpdateSelectionCommand,
 } from './protocol';
 
-const maxSmallIntegerV8 = 2 ** 30; // Max number that can be stored in V8's smis (small integers)
+const maxSmallIntegerV8 = 2 ** 30 - 1; // Max number that can be stored in V8's smis (small integers)
+const utf8TextDecoder = new TextDecoder('utf8');
 
-let ipcSequence = 0;
-function nextIpcId() {
-	if (ipcSequence === maxSmallIntegerV8) {
-		ipcSequence = 1;
-	} else {
-		ipcSequence++;
-	}
-
-	return `host:${ipcSequence}`;
-}
-
-let webviewId = 0;
-function nextWebviewId() {
-	if (webviewId === maxSmallIntegerV8) {
-		webviewId = 1;
-	} else {
-		webviewId++;
-	}
-
-	return webviewId;
-}
+const ipcSequencer = getScopedCounter();
+const webviewIdGenerator = getScopedCounter();
 
 const rebaseRegex = /^\s?#\s?Rebase\s([0-9a-f]+)(?:..([0-9a-f]+))?\sonto\s([0-9a-f]+)\s.*$/im;
 const rebaseCommandsRegex = /^\s?(p|pick|r|reword|e|edit|s|squash|f|fixup|d|drop)\s([0-9a-f]+?)\s(.*)$/gm;
@@ -128,18 +109,16 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 		this.ascending = configuration.get('rebaseEditor.ordering') === 'asc';
 	}
 
-	dispose() {
+	dispose(): void {
 		this._disposable.dispose();
 	}
 
 	private get contextKeyPrefix() {
-		return `${ContextKeys.WebviewPrefix}rebaseEditor` as const;
+		return 'gitlens:webview:rebase' as const;
 	}
 
 	get enabled(): boolean {
-		const associations = configuration.inspectAny<
-			{ [key: string]: string } | { viewType: string; filenamePattern: string }[]
-		>('workbench.editorAssociations')?.globalValue;
+		const associations = configuration.inspectCore('workbench.editorAssociations')?.globalValue;
 		if (associations == null || associations.length === 0) return true;
 
 		if (Array.isArray(associations)) {
@@ -152,7 +131,7 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 	}
 
 	private _disableAfterNextUse: boolean = false;
-	async enableForNextUse() {
+	async enableForNextUse(): Promise<void> {
 		if (!this.enabled) {
 			await this.setEnabled(true);
 			this._disableAfterNextUse = true;
@@ -162,9 +141,7 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 	async setEnabled(enabled: boolean): Promise<void> {
 		this._disableAfterNextUse = false;
 
-		const inspection = configuration.inspectAny<
-			{ [key: string]: string } | { viewType: string; filenamePattern: string }[]
-		>('workbench.editorAssociations');
+		const inspection = configuration.inspectCore('workbench.editorAssociations');
 
 		let associations = inspection?.globalValue;
 		if (Array.isArray(associations)) {
@@ -187,9 +164,13 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 		await configuration.updateAny('workbench.editorAssociations', associations, ConfigurationTarget.Global);
 	}
 
-	@debug<RebaseEditorProvider['resolveCustomTextEditor']>({ args: { 0: d => d.uri.toString(true) } })
-	async resolveCustomTextEditor(document: TextDocument, panel: WebviewPanel, _token: CancellationToken) {
-		void this.container.usage.track(`rebaseEditor:shown`);
+	@debug<RebaseEditorProvider['resolveCustomTextEditor']>({ args: { 1: false, 2: false } })
+	async resolveCustomTextEditor(
+		document: TextDocument,
+		panel: WebviewPanel,
+		_token: CancellationToken,
+	): Promise<void> {
+		void this.container.usage.track(`rebaseEditor:shown`).catch();
 
 		const repoPath = normalizePath(Uri.joinPath(document.uri, '..', '..', '..').fsPath);
 		const repo = this.container.git.getRepository(repoPath);
@@ -198,7 +179,7 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 		const context: RebaseEditorContext = {
 			dispose: () => void Disposable.from(...subscriptions).dispose(),
 
-			id: nextWebviewId(),
+			id: webviewIdGenerator.next(),
 			subscriptions: subscriptions,
 			document: document,
 			panel: panel,
@@ -209,7 +190,7 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 
 		subscriptions.push(
 			panel.onDidDispose(() => {
-				this.resetContextKeys();
+				resetContextKeys(this.contextKeyPrefix);
 
 				Disposable.from(...subscriptions).dispose();
 			}),
@@ -246,34 +227,11 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 		}
 	}
 
-	private resetContextKeys(): void {
-		void setContext(`${this.contextKeyPrefix}:inputFocus`, false);
-		void setContext(`${this.contextKeyPrefix}:focus`, false);
-		void setContext(`${this.contextKeyPrefix}:active`, false);
-	}
-
-	private setContextKeys(active: boolean | undefined, focus?: boolean, inputFocus?: boolean): void {
-		if (active != null) {
-			void setContext(`${this.contextKeyPrefix}:active`, active);
-
-			if (!active) {
-				focus = false;
-				inputFocus = false;
-			}
-		}
-		if (focus != null) {
-			void setContext(`${this.contextKeyPrefix}:focus`, focus);
-		}
-		if (inputFocus != null) {
-			void setContext(`${this.contextKeyPrefix}:inputFocus`, inputFocus);
-		}
-	}
-
 	@debug<RebaseEditorProvider['onViewFocusChanged']>({
 		args: { 0: e => `focused=${e.focused}, inputFocused=${e.inputFocused}` },
 	})
-	protected onViewFocusChanged(e: WebviewFocusChangedParams): void {
-		this.setContextKeys(e.focused, e.focused, e.inputFocused);
+	protected onViewFocusChanged(_e: WebviewFocusChangedParams): void {
+		setContextKeys(this.contextKeyPrefix);
 	}
 
 	@debug<RebaseEditorProvider['onViewStateChanged']>({
@@ -283,11 +241,10 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 		},
 	})
 	protected onViewStateChanged(context: RebaseEditorContext, e: WebviewPanelOnDidChangeViewStateEvent): void {
-		const { active, visible } = e.webviewPanel;
-		if (visible) {
-			this.setContextKeys(active);
+		if (e.webviewPanel.visible) {
+			setContextKeys(this.contextKeyPrefix);
 		} else {
-			this.resetContextKeys();
+			resetContextKeys(this.contextKeyPrefix);
 		}
 
 		if (!context.pendingChange) return;
@@ -297,10 +254,10 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 
 	private async parseState(context: RebaseEditorContext): Promise<State> {
 		if (context.branchName === undefined) {
-			const branch = await this.container.git.getBranch(context.repoPath);
+			const branch = await this.container.git.branches(context.repoPath).getBranch();
 			context.branchName = branch?.name ?? null;
 		}
-		const state = await this.parseRebaseTodo(context);
+		const state = await parseRebaseTodo(this.container, context, this.ascending);
 		return state;
 	}
 
@@ -318,56 +275,51 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 	}
 
 	private onMessageReceived(context: RebaseEditorContext, e: IpcMessage) {
-		switch (e.method) {
-			// case ReadyCommandType.method:
-			// 	onIpcCommand(ReadyCommandType, e, params => {
-			// 		this.parseDocumentAndSendChange(panel, document);
-			// 	});
-
+		switch (true) {
+			// case ReadyCommandType.is(e):
+			// 	this.parseDocumentAndSendChange(panel, document);
 			// 	break;
 
-			case WebviewFocusChangedCommandType.method:
-				onIpc(WebviewFocusChangedCommandType, e, params => {
-					this.onViewFocusChanged(params);
-				});
+			case WebviewFocusChangedCommand.is(e):
+				this.onViewFocusChanged(e.params);
+				break;
+
+			case AbortCommand.is(e):
+				void this.abort(context);
 
 				break;
 
-			case AbortCommandType.method:
-				onIpc(AbortCommandType, e, () => this.abort(context));
-
+			case DisableCommand.is(e):
+				void this.disable(context);
 				break;
 
-			case DisableCommandType.method:
-				onIpc(DisableCommandType, e, () => this.disable(context));
+			case SearchCommand.is(e):
+				void executeCoreCommand('editor.action.webvieweditor.showFind');
 				break;
 
-			case SearchCommandType.method:
-				onIpc(SearchCommandType, e, () => executeCoreCommand(CoreCommands.CustomEditorShowFindWidget));
+			case StartCommand.is(e):
+				void this.rebase(context);
 				break;
 
-			case StartCommandType.method:
-				onIpc(StartCommandType, e, () => this.rebase(context));
+			case SwitchCommand.is(e):
+				this.switchToText(context);
 				break;
 
-			case SwitchCommandType.method:
-				onIpc(SwitchCommandType, e, () => this.switchToText(context));
+			case ReorderCommand.is(e):
+				this.swapOrdering(e.params, context);
 				break;
 
-			case ReorderCommandType.method:
-				onIpc(ReorderCommandType, e, params => this.swapOrdering(params, context));
+			case ChangeEntryCommand.is(e):
+				void this.onEntryChanged(context, e.params);
 				break;
 
-			case ChangeEntryCommandType.method:
-				onIpc(ChangeEntryCommandType, e, params => this.onEntryChanged(context, params));
+			case MoveEntryCommand.is(e):
+				void this.onEntryMoved(context, e.params);
 				break;
 
-			case MoveEntryCommandType.method:
-				onIpc(MoveEntryCommandType, e, params => this.onEntryMoved(context, params));
+			case UpdateSelectionCommand.is(e):
+				this.onSelectionChanged(context, e.params);
 				break;
-
-			case UpdateSelectionCommandType.method:
-				onIpc(UpdateSelectionCommandType, e, params => this.onSelectionChanged(context, params));
 		}
 	}
 
@@ -512,11 +464,20 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 		// Find the full sha
 		sha = context.commits?.find(c => c.sha.startsWith(sha!))?.sha ?? sha;
 
-		void GitActions.Commit.showDetailsView(GitReference.create(sha, context.repoPath, { refType: 'revision' }), {
-			pin: false,
-			preserveFocus: true,
-			preserveVisibility: context.firstSelection ? showDetailsView === false : showDetailsView !== 'selection',
-		});
+		this.container.events.fire(
+			'commit:selected',
+			{
+				commit: createReference(sha, context.repoPath, { refType: 'revision' }),
+				interaction: 'passive',
+				preserveFocus: true,
+				preserveVisibility: context.firstSelection
+					? showDetailsView === false
+					: showDetailsView !== 'selection',
+			},
+			{
+				source: 'gitlens.rebase',
+			},
+		);
 		context.firstSelection = false;
 	}
 
@@ -548,8 +509,9 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 
 		const state = await this.parseState(context);
 		void this.postMessage(context, {
-			id: nextIpcId(),
-			method: DidChangeNotificationType.method,
+			id: `host:${ipcSequencer.next()}`,
+			scope: DidChangeNotification.scope,
+			method: DidChangeNotification.method,
 			params: { state: state },
 		});
 	}
@@ -596,7 +558,7 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 		void showRebaseSwitchToTextWarningMessage();
 
 		// Open the text version of the document
-		void executeCoreCommand(CoreCommands.Open, context.document.uri, {
+		void executeCoreCommand('vscode.open', context.document.uri, {
 			override: false,
 			preview: false,
 		});
@@ -605,140 +567,130 @@ export class RebaseEditorProvider implements CustomTextEditorProvider, Disposabl
 	private async getHtml(context: RebaseEditorContext): Promise<string> {
 		const webRootUri = Uri.joinPath(this.container.context.extensionUri, 'dist', 'webviews');
 		const uri = Uri.joinPath(webRootUri, 'rebase.html');
-		const content = new TextDecoder('utf8').decode(await workspace.fs.readFile(uri));
 
-		const bootstrap = await this.parseState(context);
-		const cspSource = context.panel.webview.cspSource;
-		const cspNonce = getNonce();
+		const [bytes, bootstrap] = await Promise.all([workspace.fs.readFile(uri), this.parseState(context)]);
 
-		const root = context.panel.webview.asWebviewUri(this.container.context.extensionUri).toString();
-		const webRoot = context.panel.webview.asWebviewUri(webRootUri).toString();
-
-		const html = content.replace(
-			/#{(head|body|endOfBody|placement|cspSource|cspNonce|root|webroot)}/g,
-			(_substring: string, token: string) => {
-				switch (token) {
-					case 'endOfBody':
-						return `<script type="text/javascript" nonce="${cspNonce}">window.bootstrap=${JSON.stringify(
-							bootstrap,
-						)};</script>`;
-					case 'placement':
-						return 'editor';
-					case 'cspSource':
-						return cspSource;
-					case 'cspNonce':
-						return cspNonce;
-					case 'root':
-						return root;
-					case 'webroot':
-						return webRoot;
-					default:
-						return '';
-				}
-			},
+		const html = replaceWebviewHtmlTokens(
+			utf8TextDecoder.decode(bytes),
+			'gitlens.rebase',
+			undefined,
+			context.panel.webview.cspSource,
+			getNonce(),
+			context.panel.webview.asWebviewUri(this.container.context.extensionUri).toString(),
+			context.panel.webview.asWebviewUri(webRootUri).toString(),
+			'editor',
+			bootstrap,
 		);
-
 		return html;
 	}
+}
 
-	@debug({ args: false })
-	private async parseRebaseTodo(context: RebaseEditorContext): Promise<Omit<State, 'rebasing'>> {
-		const contents = context.document.getText();
-		const entries = parseRebaseTodoEntries(contents);
-		let [, , , onto] = rebaseRegex.exec(contents) ?? ['', '', ''];
+async function loadRichCommitData(
+	container: Container,
+	context: RebaseEditorContext,
+	onto: string,
+	entries: RebaseEntry[],
+) {
+	context.commits = [];
+	context.authors = new Map<string, Author>();
 
-		if (context.authors == null || context.commits == null) {
-			await this.loadRichCommitData(context, onto, entries);
-		}
+	const log = await container.git.commits(context.repoPath).searchCommits(
+		{
+			query: `${onto ? `#:${onto} ` : ''}${join(
+				map(entries, e => `#:${e.sha}`),
+				' ',
+			)}`,
+		},
+		{ limit: 0 },
+	);
 
-		const defaultDateFormat = configuration.get('defaultDateFormat');
-		const command = ShowCommitsInViewCommand.getMarkdownCommandArgs(`\${commit}`, context.repoPath);
+	if (log != null) {
+		for (const c of log.commits.values()) {
+			context.commits.push(c);
 
-		const ontoCommit = onto ? context.commits?.find(c => c.sha.startsWith(onto)) : undefined;
-
-		let commit;
-		for (const entry of entries) {
-			commit = context.commits?.find(c => c.sha.startsWith(entry.sha));
-			if (commit == null) continue;
-
-			// If the onto commit is contained in the list of commits, remove it and clear the 'onto' value — See #1201
-			if (commit.sha === ontoCommit?.sha) {
-				onto = '';
+			if (!context.authors.has(c.author.name)) {
+				context.authors.set(c.author.name, {
+					author: c.author.name,
+					avatarUrl: (await c.getAvatarUri()).toString(true),
+					email: c.author.email,
+				});
 			}
+			if (!context.authors.has(c.committer.name)) {
+				const avatarUri = await c.committer.getAvatarUri(c);
+				context.authors.set(c.committer.name, {
+					author: c.committer.name,
+					avatarUrl: avatarUri.toString(true),
+					email: c.committer.email,
+				});
+			}
+		}
+	}
+}
 
-			entry.commit = {
-				sha: commit.sha,
-				author: commit.author.name,
-				committer: commit.committer.name,
-				date: commit.formatDate(defaultDateFormat),
-				dateFromNow: commit.formatDateFromNow(),
-				message: emojify(commit.message ?? commit.summary),
-			};
+async function parseRebaseTodo(
+	container: Container,
+	context: RebaseEditorContext,
+	ascending: boolean,
+): Promise<Omit<State, 'rebasing'>> {
+	const contents = context.document.getText();
+	const entries = parseRebaseTodoEntries(contents);
+	let [, , , onto] = rebaseRegex.exec(contents) ?? ['', '', ''];
+
+	if (context.authors == null || context.commits == null) {
+		await loadRichCommitData(container, context, onto, entries);
+	}
+
+	const defaultDateFormat = configuration.get('defaultDateFormat');
+	const command = InspectCommand.createMarkdownCommandLink(`\${commit}`, context.repoPath);
+
+	const ontoCommit = onto ? context.commits?.find(c => c.sha.startsWith(onto)) : undefined;
+
+	let commit;
+	for (const entry of entries) {
+		commit = context.commits?.find(c => c.sha.startsWith(entry.sha));
+		if (commit == null) continue;
+
+		// If the onto commit is contained in the list of commits, remove it and clear the 'onto' value — See #1201
+		if (commit.sha === ontoCommit?.sha) {
+			onto = '';
 		}
 
-		return {
-			branch: context.branchName ?? '',
-			onto: onto
-				? {
-						sha: onto,
-						commit:
-							ontoCommit != null
-								? {
-										sha: ontoCommit.sha,
-										author: ontoCommit.author.name,
-										committer: ontoCommit.committer.name,
-										date: ontoCommit.formatDate(defaultDateFormat),
-										dateFromNow: ontoCommit.formatDateFromNow(),
-										message: emojify(ontoCommit.message || 'root'),
-								  }
-								: undefined,
-				  }
-				: undefined,
-			entries: entries,
-			authors: context.authors != null ? Object.fromEntries(context.authors) : {},
-			commands: { commit: command },
-			ascending: this.ascending,
+		entry.commit = {
+			sha: commit.sha,
+			author: commit.author.name,
+			committer: commit.committer.name,
+			date: commit.formatDate(defaultDateFormat),
+			dateFromNow: commit.formattedDate,
+			message: emojify(commit.message ?? commit.summary),
 		};
 	}
 
-	@debug({ args: false })
-	private async loadRichCommitData(context: RebaseEditorContext, onto: string, entries: RebaseEntry[]) {
-		context.commits = [];
-		context.authors = new Map<string, Author>();
-
-		const log = await this.container.git.richSearchCommits(
-			context.repoPath,
-			{
-				query: `${onto ? `#:${onto} ` : ''}${join(
-					map(entries, e => `#:${e.sha}`),
-					' ',
-				)}`,
-			},
-			{ limit: 0 },
-		);
-
-		if (log != null) {
-			for (const c of log.commits.values()) {
-				context.commits.push(c);
-
-				if (!context.authors.has(c.author.name)) {
-					context.authors.set(c.author.name, {
-						author: c.author.name,
-						avatarUrl: (await c.getAvatarUri()).toString(true),
-						email: c.author.email,
-					});
-				}
-				if (!context.authors.has(c.committer.name)) {
-					const avatarUri = await c.committer.getAvatarUri(c);
-					context.authors.set(c.committer.name, {
-						author: c.committer.name,
-						avatarUrl: avatarUri.toString(true),
-						email: c.committer.email,
-					});
-				}
-			}
-		}
-	}
+	return {
+		webviewId: 'gitlens.rebase',
+		webviewInstanceId: undefined,
+		timestamp: Date.now(),
+		branch: context.branchName ?? '',
+		onto: onto
+			? {
+					sha: onto,
+					commit:
+						ontoCommit != null
+							? {
+									sha: ontoCommit.sha,
+									author: ontoCommit.author.name,
+									committer: ontoCommit.committer.name,
+									date: ontoCommit.formatDate(defaultDateFormat),
+									dateFromNow: ontoCommit.formatDateFromNow(),
+									message: emojify(ontoCommit.message || 'root'),
+							  }
+							: undefined,
+			  }
+			: undefined,
+		entries: entries,
+		authors: context.authors != null ? Object.fromEntries(context.authors) : {},
+		commands: { commit: command },
+		ascending: ascending,
+	};
 }
 
 function parseRebaseTodoEntries(contents: string): RebaseEntry[];
@@ -763,9 +715,9 @@ function parseRebaseTodoEntries(contentsOrDocument: string | TextDocument): Reba
 			index: match.index,
 			action: rebaseActionsMap.get(action) ?? 'pick',
 			// Stops excessive memory usage -- https://bugs.chromium.org/p/v8/issues/detail?id=2869
-			sha: ` ${sha}`.substr(1),
+			sha: ` ${sha}`.substring(1),
 			// Stops excessive memory usage -- https://bugs.chromium.org/p/v8/issues/detail?id=2869
-			message: message == null || message.length === 0 ? '' : ` ${message}`.substr(1),
+			message: message == null || message.length === 0 ? '' : ` ${message}`.substring(1),
 		});
 	} while (true);
 

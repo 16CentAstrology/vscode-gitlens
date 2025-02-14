@@ -1,98 +1,89 @@
-import { ColorThemeKind, ThemeColor, ThemeIcon, window } from 'vscode';
-import { Colors } from '../../constants';
-import type { RemoteProviderReference } from './remoteProvider';
+import type { IssueOrPullRequest, IssueOrPullRequestState } from './issueOrPullRequest';
+import type { ProviderReference } from './remoteProvider';
+import type { RepositoryIdentityDescriptor } from './repositoryIdentities';
 
-export const enum IssueOrPullRequestType {
-	Issue = 'Issue',
-	PullRequest = 'PullRequest',
+export function isIssue(issue: unknown): issue is Issue {
+	return issue instanceof Issue;
 }
 
-export interface IssueOrPullRequest {
-	readonly type: IssueOrPullRequestType;
-	readonly provider: RemoteProviderReference;
-	readonly id: string;
-	readonly title: string;
-	readonly url: string;
-	readonly date: Date;
-	readonly closedDate?: Date;
-	readonly closed: boolean;
+export interface IssueShape extends IssueOrPullRequest {
+	author: IssueMember;
+	assignees: IssueMember[];
+	repository?: IssueRepository;
+	labels?: IssueLabel[];
+	body?: string;
+	project?: IssueProject;
 }
 
-export function serializeIssueOrPullRequest(value: IssueOrPullRequest): IssueOrPullRequest {
-	const serialized: IssueOrPullRequest = {
-		type: value.type,
-		provider: {
-			id: value.provider.id,
-			name: value.provider.name,
-			domain: value.provider.domain,
-			icon: value.provider.icon,
-		},
-		id: value.id,
-		title: value.title,
-		url: value.url,
-		date: value.date,
-		closedDate: value.closedDate,
-		closed: value.closed,
-	};
-	return serialized;
+export class Issue implements IssueShape {
+	readonly type = 'issue';
+
+	constructor(
+		public readonly provider: ProviderReference,
+		public readonly id: string,
+		public readonly nodeId: string | undefined,
+		public readonly title: string,
+		public readonly url: string,
+		public readonly createdDate: Date,
+		public readonly updatedDate: Date,
+		public readonly closed: boolean,
+		public readonly state: IssueOrPullRequestState,
+		public readonly author: IssueMember,
+		public readonly assignees: IssueMember[],
+		public readonly repository?: IssueRepository,
+		public readonly closedDate?: Date,
+		public readonly labels?: IssueLabel[],
+		public readonly commentsCount?: number,
+		public readonly thumbsUpCount?: number,
+		public readonly body?: string,
+		public readonly project?: IssueProject,
+	) {}
 }
 
-export namespace IssueOrPullRequest {
-	export function getHtmlIcon(issue: IssueOrPullRequest): string {
-		if (issue.type === IssueOrPullRequestType.PullRequest) {
-			if (issue.closed) {
-				return `<span class="codicon codicon-git-pull-request" style="color:${
-					window.activeColorTheme.kind === ColorThemeKind.Dark ? '#a371f7' : '#8250df'
-				};"></span>`;
-			}
-			return `<span class="codicon codicon-git-pull-request" style="color:${
-				window.activeColorTheme.kind === ColorThemeKind.Dark ? '#3fb950' : '#1a7f37'
-			};"></span>`;
-		}
-
-		if (issue.closed) {
-			return `<span class="codicon codicon-pass" style="color:${
-				window.activeColorTheme.kind === ColorThemeKind.Dark ? '#a371f7' : '#8250df'
-			};"></span>`;
-		}
-		return `<span class="codicon codicon-issues" style="color:${
-			window.activeColorTheme.kind === ColorThemeKind.Dark ? '#3fb950' : '#1a7f37'
-		};"></span>`;
-	}
-
-	export function getMarkdownIcon(issue: IssueOrPullRequest): string {
-		if (issue.type === IssueOrPullRequestType.PullRequest) {
-			if (issue.closed) {
-				return `<span style="color:${
-					window.activeColorTheme.kind === ColorThemeKind.Dark ? '#a371f7' : '#8250df'
-				};">$(git-pull-request)</span>`;
-			}
-			return `<span style="color:${
-				window.activeColorTheme.kind === ColorThemeKind.Dark ? '#3fb950' : '#1a7f37'
-			};">$(git-pull-request)</span>`;
-		}
-
-		if (issue.closed) {
-			return `<span style="color:${
-				window.activeColorTheme.kind === ColorThemeKind.Dark ? '#a371f7' : '#8250df'
-			};">$(pass)</span>`;
-		}
-		return `<span style="color:${
-			window.activeColorTheme.kind === ColorThemeKind.Dark ? '#3fb950' : '#1a7f37'
-		};">$(issues)</span>`;
-	}
-
-	export function getThemeIcon(issue: IssueOrPullRequest): ThemeIcon {
-		if (issue.type === IssueOrPullRequestType.PullRequest) {
-			if (issue.closed) {
-				return new ThemeIcon('git-pull-request', new ThemeColor(Colors.MergedPullRequestIconColor));
-			}
-			return new ThemeIcon('git-pull-request', new ThemeColor(Colors.OpenPullRequestIconColor));
-		}
-
-		if (issue.closed) {
-			return new ThemeIcon('pass', new ThemeColor(Colors.ClosedAutolinkedIssueIconColor));
-		}
-		return new ThemeIcon('issues', new ThemeColor(Colors.OpenAutolinkedIssueIconColor));
-	}
+export enum RepositoryAccessLevel {
+	Admin = 100,
+	Maintain = 40,
+	Write = 30,
+	Triage = 20,
+	Read = 10,
+	None = 0,
 }
+
+export interface IssueLabel {
+	color?: string;
+	name: string;
+}
+
+export interface IssueMember {
+	id: string;
+	name: string;
+	avatarUrl?: string;
+	url?: string;
+}
+
+export interface IssueProject {
+	id: string;
+	name: string;
+	resourceId: string;
+	resourceName: string;
+}
+
+export interface IssueRepository {
+	owner: string;
+	repo: string;
+	accessLevel?: RepositoryAccessLevel;
+	url?: string;
+	id?: string;
+}
+
+export interface SearchedIssue {
+	issue: IssueShape;
+	reasons: string[];
+}
+
+export type IssueRepositoryIdentityDescriptor = RequireSomeWithProps<
+	RequireSome<RepositoryIdentityDescriptor<string>, 'provider'>,
+	'provider',
+	'id' | 'domain' | 'repoDomain' | 'repoName'
+> &
+	RequireSomeWithProps<RequireSome<RepositoryIdentityDescriptor<string>, 'remote'>, 'remote', 'domain'>;

@@ -1,16 +1,15 @@
 import type { Event, QuickPickItem } from 'vscode';
 import { Disposable, EventEmitter, window } from 'vscode';
-import type { Config } from '../configuration';
-import { configuration } from '../configuration';
-import { Commands, ContextKeys } from '../constants';
+import type { Config } from '../config';
+import { actionCommandPrefix } from '../constants.commands';
 import type { Container } from '../container';
-import { setContext } from '../context';
-import { registerCommand } from '../system/command';
+import { registerCommand } from '../system/-webview/command';
+import { configuration } from '../system/-webview/configuration';
+import { setContext } from '../system/-webview/context';
+import { getQuickPickIgnoreFocusOut } from '../system/-webview/vscode';
+import { getScopedCounter } from '../system/counter';
 import { sortCompare } from '../system/string';
-import { getQuickPickIgnoreFocusOut } from '../system/utils';
 import type { Action, ActionContext, ActionRunner } from './gitlens';
-
-const maxSmallIntegerV8 = 2 ** 30; // Max number that can be stored in V8's smis (small integers)
 
 type Actions = ActionContext['type'];
 const actions: Actions[] = ['createPullRequest', 'openPullRequest', 'hover.commands'];
@@ -28,7 +27,10 @@ export const builtInActionRunnerName = 'Built In';
 class ActionRunnerQuickPickItem implements QuickPickItem {
 	private readonly _label: string;
 
-	constructor(public readonly runner: RegisteredActionRunner, context: ActionContext) {
+	constructor(
+		public readonly runner: RegisteredActionRunner,
+		context: ActionContext,
+	) {
 		this._label = typeof runner.label === 'string' ? runner.label : runner.label(context);
 	}
 
@@ -53,16 +55,7 @@ class NoActionRunnersQuickPickItem implements QuickPickItem {
 	}
 }
 
-let runnerId = 0;
-function nextRunnerId() {
-	if (runnerId === maxSmallIntegerV8) {
-		runnerId = 1;
-	} else {
-		runnerId++;
-	}
-
-	return runnerId;
-}
+const runnerIdGenerator = getScopedCounter();
 
 class RegisteredActionRunner<T extends ActionContext = ActionContext> implements ActionRunner<T>, Disposable {
 	readonly id: number;
@@ -72,10 +65,10 @@ class RegisteredActionRunner<T extends ActionContext = ActionContext> implements
 		private readonly runner: ActionRunner<T>,
 		private readonly unregister: () => void,
 	) {
-		this.id = nextRunnerId();
+		this.id = runnerIdGenerator.next();
 	}
 
-	dispose() {
+	dispose(): void {
 		this.unregister();
 	}
 
@@ -144,7 +137,7 @@ export class ActionRunners implements Disposable {
 
 		for (const action of actions) {
 			subscriptions.push(
-				registerCommand(`${Commands.ActionPrefix}${action}`, (context: ActionContext, runnerId?: number) =>
+				registerCommand(`${actionCommandPrefix}${action}`, (context: ActionContext, runnerId?: number) =>
 					this.run(context, runnerId),
 				),
 			);
@@ -153,7 +146,7 @@ export class ActionRunners implements Disposable {
 		this._disposable = Disposable.from(...subscriptions);
 	}
 
-	dispose() {
+	dispose(): void {
 		this._disposable.dispose();
 
 		for (const runners of this._actionRunners.values()) {
@@ -195,13 +188,13 @@ export class ActionRunners implements Disposable {
 		const runnersMap = this._actionRunners;
 
 		const registeredRunner = new RegisteredActionRunner(type, runner, function (this: RegisteredActionRunner) {
-			if (runners!.length === 1) {
+			if (runners.length === 1) {
 				runnersMap.delete(action);
 				onChanged(action);
 			} else {
-				const index = runners!.indexOf(this);
+				const index = runners.indexOf(this);
 				if (index !== -1) {
-					runners!.splice(index, 1);
+					runners.splice(index, 1);
 				}
 			}
 		});
@@ -245,7 +238,7 @@ export class ActionRunners implements Disposable {
 		);
 	}
 
-	async run<T extends ActionContext>(context: T, runnerId?: number) {
+	async run<T extends ActionContext>(context: T, runnerId?: number): Promise<void> {
 		let runners = this.get(context.type);
 		if (runners == null || runners.length === 0) return;
 
@@ -326,7 +319,7 @@ export class ActionRunners implements Disposable {
 	}
 
 	private async _updateContextKeys(action: Actions) {
-		await setContext(`${ContextKeys.ActionPrefix}${action}`, this.count(action));
+		await setContext(`gitlens:action:${action}`, this.count(action));
 	}
 
 	private async _updateAllContextKeys() {

@@ -4,6 +4,7 @@ export interface Disposable {
 	dispose: () => void;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace DOM {
 	export function on<K extends keyof WindowEventMap>(
 		window: Window,
@@ -21,6 +22,12 @@ export namespace DOM {
 		element: T,
 		name: K,
 		listener: (e: DocumentEventMap[K] & { target: HTMLElement | null }, target: T) => void,
+		options?: boolean | AddEventListenerOptions,
+	): Disposable;
+	export function on<T extends HTMLElement, K>(
+		element: T,
+		name: string,
+		listener: (e: CustomEvent<K> & { target: HTMLElement | null }, target: T) => void,
 		options?: boolean | AddEventListenerOptions,
 	): Disposable;
 	export function on<T extends Element, K extends keyof DocumentEventMap>(
@@ -75,46 +82,33 @@ export namespace DOM {
 			},
 		};
 	}
+}
 
-	export function insertTemplate(
-		id: string,
-		$slot: HTMLElement,
-		options?: { bindings?: Record<string, unknown>; visible?: Record<string, boolean> },
-	): void {
-		const $template = document.getElementById(id) as HTMLTemplateElement;
-		$slot.replaceChildren($template?.content.cloneNode(true));
-		$slot.className = $template.className;
+/** Parses a CSS duration and returns the number of milliseconds. */
+export function parseDuration(delay: number | string): number {
+	delay = delay.toString().toLowerCase();
 
-		if (options?.visible != null) {
-			const $els = $slot.querySelectorAll<HTMLElement>(`[data-visible]`);
-			for (const $el of $els) {
-				const key = $el.dataset.visible;
-				if (!key) continue;
+	if (delay.includes('ms')) {
+		return parseFloat(delay);
+	}
 
-				if (options.visible[key]) {
-					$el.style.display = 'initial';
-				} else {
-					$el.style.display = 'none';
-				}
+	if (delay.includes('s')) {
+		return parseFloat(delay) * 1000;
+	}
+
+	return parseFloat(delay);
+}
+
+/** Waits for a specific event to be emitted from an element. Ignores events that bubble up from child elements. */
+export function waitForEvent(el: HTMLElement, eventName: string): Promise<void> {
+	return new Promise<void>(resolve => {
+		function done(event: Event) {
+			if (event.target === el) {
+				el.removeEventListener(eventName, done);
+				resolve();
 			}
 		}
 
-		if (options?.bindings != null) {
-			const $els = $slot.querySelectorAll<HTMLElement>(`[data-bind]`);
-			for (const $el of $els) {
-				const key = $el.dataset.bind;
-				if (!key) continue;
-
-				const value = options.bindings[key];
-				if (value == null) continue;
-
-				$el.textContent = String(value);
-			}
-		}
-	}
-
-	export function resetSlot($slot: HTMLElement) {
-		$slot.replaceChildren();
-		$slot.className = '';
-	}
+		el.addEventListener(eventName, done);
+	});
 }

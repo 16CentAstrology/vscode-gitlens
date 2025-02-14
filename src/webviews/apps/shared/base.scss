@@ -1,3 +1,6 @@
+@use './styles/scrollbars';
+@use './styles/utils';
+
 html {
 	height: 100%;
 	font-size: 62.5%;
@@ -7,53 +10,11 @@ html {
 body {
 	background-color: var(--color-background);
 	color: var(--color-foreground);
-	font-family: var(--font-family);
 	height: 100%;
 	line-height: 1.4;
-	font-size: 100% !important;
-
-	&.scrollable,
-	.scrollable {
-		border-color: transparent;
-		transition: border-color 1s linear;
-	}
-
-	&:hover,
-	&:focus-within {
-		&.scrollable,
-		.scrollable {
-			border-color: var(--vscode-scrollbarSlider-background);
-			transition: none;
-		}
-	}
-
-	&.preload {
-		&.scrollable,
-		.scrollable {
-			transition: none;
-		}
-	}
 }
 
-::-webkit-scrollbar-corner {
-	background-color: transparent !important;
-}
-
-::-webkit-scrollbar-thumb {
-	background-color: transparent;
-	border-color: inherit;
-	border-right-style: inset;
-	border-right-width: calc(100vw + 100vh);
-	border-radius: unset !important;
-
-	&:hover {
-		border-color: var(--vscode-scrollbarSlider-hoverBackground);
-	}
-
-	&:active {
-		border-color: var(--vscode-scrollbarSlider-activeBackground);
-	}
-}
+@include scrollbars.scrollableBase();
 
 a {
 	border: 0;
@@ -129,17 +90,22 @@ input[type='checkbox'] {
 	cursor: pointer;
 	margin: 0;
 	padding: 0 10px;
-	mix-blend-mode: luminosity;
+	accent-color: var(--color-background--lighten-30);
 
 	&:focus {
 		background: rgba(0, 0, 0, 0.1);
 		border-radius: 5px;
-		outline: none;
+		outline: 1px solid var(--vscode-focusBorder);
+		outline-offset: -1px;
 	}
 
 	&[disabled] {
 		color: var(--color-foreground--75);
 		cursor: default;
+	}
+
+	@include utils.light-theme($selectorPostfix: ' &') {
+		accent-color: var(--color-background--darken-50);
 	}
 }
 
@@ -154,22 +120,22 @@ textarea {
 	padding: 4px;
 	width: 100%;
 
-	.vscode-dark & {
+	@include utils.dark-theme($selectorPostfix: ' &') {
 		border: 1px solid rgba(255, 255, 255, 0.3);
 	}
 
-	.vscode-light & {
+	@include utils.light-theme($selectorPostfix: ' &') {
 		border: 1px solid rgba(0, 0, 0, 0.3);
 	}
 
 	&:focus {
 		outline-color: var(--color-focus-border);
 
-		.vscode-light & {
+		@include utils.light-theme($selectorPostfix: ' &') {
 			background-color: rgba(255, 255, 255, 0.4);
 		}
 
-		.vscode-dark & {
+		@include utils.dark-theme($selectorPostfix: ' &') {
 			background-color: rgba(0, 0, 0, 0.2);
 		}
 	}
@@ -212,21 +178,21 @@ select {
 	appearance: none;
 	-webkit-appearance: none;
 
-	.vscode-light & {
+	@include utils.light-theme($selectorPostfix: ' &') {
 		border: 1px solid rgba(0, 0, 0, 0.3);
 	}
 
-	.vscode-dark & {
+	@include utils.dark-theme($selectorPostfix: ' &') {
 		border: 1px solid rgba(255, 255, 255, 0.3);
 	}
 
 	&:focus {
 		outline-color: var(--color-focus-border);
-		.vscode-light & {
+		@include utils.light-theme($selectorPostfix: ' &') {
 			background-color: rgba(255, 255, 255, 0.4);
 		}
 
-		.vscode-dark & {
+		@include utils.dark-theme($selectorPostfix: ' &') {
 			background-color: rgba(0, 0, 0, 0.2);
 		}
 	}
@@ -237,22 +203,22 @@ select {
 	}
 
 	& option {
-		.vscode-light & {
+		@include utils.light-theme($selectorPostfix: ' &') {
 			background-color: var(--color-background--darken-05);
 		}
 
-		.vscode-dark & {
+		@include utils.dark-theme($selectorPostfix: ' &') {
 			background-color: var(--color-background--lighten-05);
 		}
 
 		&:focus {
 			outline-color: var(--color-focus-border);
 
-			.vscode-light & {
+			@include utils.light-theme($selectorPostfix: ' &') {
 				background-color: rgba(255, 255, 255, 0.4);
 			}
 
-			.vscode-dark & {
+			@include utils.dark-theme($selectorPostfix: ' &') {
 				background-color: rgba(0, 0, 0, 0.2);
 			}
 		}
@@ -291,9 +257,8 @@ ul {
 }
 
 code {
-	background: rgba(255, 255, 255, 0.05);
+	background: var(--vscode-textCodeBlock-background);
 	color: var(--color-foreground--75);
 	border-radius: 3px;
-	padding: 2px 4px;
-	vertical-align: middle;
+	padding: 0px 4px 2px 4px;
 }

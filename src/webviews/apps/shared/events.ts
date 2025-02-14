@@ -2,9 +2,7 @@ export interface Disposable {
 	dispose(): void;
 }
 
-export interface Event<T> {
-	(listener: (e: T) => unknown, thisArgs?: unknown, disposables?: Disposable[]): Disposable;
-}
+export type Event<T> = (listener: (e: T) => unknown, thisArgs?: unknown, disposables?: Disposable[]) => Disposable;
 
 type Listener<T> = [(e: T) => void, unknown] | ((e: T) => void);
 
@@ -76,14 +74,14 @@ export class Emitter<T> {
 					} else {
 						listener[0].call(listener[1], event);
 					}
-				} catch (e) {
+				} catch (_ex) {
 					debugger;
 				}
 			}
 		}
 	}
 
-	dispose() {
+	dispose(): void {
 		this.listeners?.clear();
 		this._deliveryQueue?.clear();
 		this._disposed = true;

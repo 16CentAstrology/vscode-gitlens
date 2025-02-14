@@ -1,27 +1,26 @@
-import { configuration, OutputLevel } from '../configuration';
-import { Commands } from '../constants';
 import type { Container } from '../container';
-import { command } from '../system/command';
-import { Command } from './base';
+import { command } from '../system/-webview/command';
+import { configuration } from '../system/-webview/configuration';
+import { GlCommandBase } from './commandBase';
 
 @command()
-export class EnableDebugLoggingCommand extends Command {
+export class EnableDebugLoggingCommand extends GlCommandBase {
 	constructor(private readonly container: Container) {
-		super(Commands.EnableDebugLogging);
+		super('gitlens.enableDebugLogging');
 	}
 
-	async execute() {
-		await configuration.updateEffective('outputLevel', OutputLevel.Debug);
+	async execute(): Promise<void> {
+		await configuration.updateEffective('outputLevel', 'debug');
 	}
 }
 
 @command()
-export class DisableDebugLoggingCommand extends Command {
+export class DisableDebugLoggingCommand extends GlCommandBase {
 	constructor(private readonly container: Container) {
-		super(Commands.DisableDebugLogging);
+		super('gitlens.disableDebugLogging');
 	}
 
-	async execute() {
-		await configuration.updateEffective('outputLevel', OutputLevel.Errors);
+	async execute(): Promise<void> {
+		await configuration.updateEffective('outputLevel', 'error');
 	}
 }

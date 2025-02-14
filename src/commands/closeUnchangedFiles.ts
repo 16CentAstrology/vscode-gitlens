@@ -1,33 +1,32 @@
 import type { Uri } from 'vscode';
 import { TabInputCustom, TabInputNotebook, TabInputNotebookDiff, TabInputText, TabInputTextDiff, window } from 'vscode';
-import { UriComparer } from '../comparers';
-import { Commands } from '../constants';
 import type { Container } from '../container';
-import { Logger } from '../logger';
 import { showGenericErrorMessage } from '../messages';
-import { RepositoryPicker } from '../quickpicks/repositoryPicker';
-import { command } from '../system/command';
-import { Command } from './base';
+import { getRepositoryOrShowPicker } from '../quickpicks/repositoryPicker';
+import { command } from '../system/-webview/command';
+import { UriComparer } from '../system/comparers';
+import { Logger } from '../system/logger';
+import { GlCommandBase } from './commandBase';
 
 export interface CloseUnchangedFilesCommandArgs {
 	uris?: Uri[];
 }
 
 @command()
-export class CloseUnchangedFilesCommand extends Command {
+export class CloseUnchangedFilesCommand extends GlCommandBase {
 	constructor(private readonly container: Container) {
-		super(Commands.CloseUnchangedFiles);
+		super('gitlens.closeUnchangedFiles');
 	}
 
-	async execute(args?: CloseUnchangedFilesCommandArgs) {
+	async execute(args?: CloseUnchangedFilesCommandArgs): Promise<void> {
 		args = { ...args };
 
 		try {
 			if (args.uris == null) {
-				const repository = await RepositoryPicker.getRepositoryOrShow('Close All Unchanged Files');
+				const repository = await getRepositoryOrShowPicker('Close All Unchanged Files');
 				if (repository == null) return;
 
-				const status = await this.container.git.getStatusForRepo(repository.uri);
+				const status = await this.container.git.status(repository.uri).getStatus();
 				if (status == null) {
 					void window.showWarningMessage('Unable to close unchanged files');
 

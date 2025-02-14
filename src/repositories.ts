@@ -1,11 +1,12 @@
 import type { Uri } from 'vscode';
 import { isLinux } from '@env/platform';
 import { Schemes } from './constants';
+import type { RevisionUriData } from './git/gitProvider';
+import { decodeGitLensRevisionUriAuthority } from './git/gitUri.authority';
 import type { Repository } from './git/models/repository';
-import { addVslsPrefixIfNeeded, normalizePath } from './system/path';
+import { addVslsPrefixIfNeeded } from './system/-webview/path.vsls';
+import { normalizePath } from './system/path';
 import { UriTrie } from './system/trie';
-// TODO@eamodio don't import from string here since it will break the tests because of ESM dependencies
-// import { CharCode } from './string';
 
 const slash = 47; //CharCode.Slash;
 
@@ -24,7 +25,6 @@ export function normalizeRepoUri(uri: Uri): { path: string; ignoreCase: boolean 
 			return { path: path, ignoreCase: !isLinux };
 
 		case Schemes.Git:
-		case Schemes.GitLens:
 			path = uri.path;
 			if (path.charCodeAt(path.length - 1) === slash) {
 				path = path.slice(1, -1);
@@ -33,6 +33,21 @@ export function normalizeRepoUri(uri: Uri): { path: string; ignoreCase: boolean 
 			}
 			return { path: path, ignoreCase: !isLinux };
 
+		case Schemes.GitLens: {
+			path = uri.path;
+
+			const metadata = decodeGitLensRevisionUriAuthority<RevisionUriData>(uri.authority);
+			if (metadata.uncPath != null && !path.startsWith(metadata.uncPath)) {
+				path = `${metadata.uncPath}${uri.path}`;
+			}
+
+			if (path.charCodeAt(path.length - 1) === slash) {
+				path = path.slice(1, -1);
+			} else {
+				path = path.startsWith('//') ? path : path.slice(1);
+			}
+			return { path: path, ignoreCase: !isLinux };
+		}
 		case Schemes.Virtual:
 		case Schemes.GitHub: {
 			path = uri.path;
@@ -127,8 +142,8 @@ export class Repositories {
 		return this._trie.has(uri);
 	}
 
-	remove(uri: Uri): boolean {
-		const deleted = this._trie.delete(uri);
+	remove(uri: Uri, dispose: boolean = true): boolean {
+		const deleted = this._trie.delete(uri, dispose);
 		if (deleted) {
 			this._count--;
 		}

@@ -1,19 +1,21 @@
 import type { Command } from 'vscode';
 import { TreeItem, TreeItemCollapsibleState } from 'vscode';
-import type { DiffWithPreviousCommandArgs } from '../../commands';
-import { Commands } from '../../constants';
+import type { DiffWithPreviousCommandArgs } from '../../commands/diffWithPrevious';
+import { GlCommand } from '../../constants.commands';
 import { StatusFileFormatter } from '../../git/formatters/statusFormatter';
 import { GitUri } from '../../git/gitUri';
-import { GitFile } from '../../git/models/file';
+import type { GitFile } from '../../git/models/file';
+import { getGitFileStatusIcon } from '../../git/utils/fileStatus.utils';
 import { dirname, joinPaths } from '../../system/path';
 import type { ViewsWithCommits } from '../viewBase';
+import { getFileTooltipMarkdown, ViewFileNode } from './abstract/viewFileNode';
+import type { ViewNode } from './abstract/viewNode';
+import { ContextValues } from './abstract/viewNode';
 import type { FileNode } from './folderNode';
-import type { ViewNode } from './viewNode';
-import { ContextValues, ViewFileNode } from './viewNode';
 
-export class UncommittedFileNode extends ViewFileNode<ViewsWithCommits> implements FileNode {
+export class UncommittedFileNode extends ViewFileNode<'uncommitted-file', ViewsWithCommits> implements FileNode {
 	constructor(view: ViewsWithCommits, parent: ViewNode, repoPath: string, file: GitFile) {
-		super(GitUri.fromFile(file, repoPath), view, parent, file);
+		super('uncommitted-file', GitUri.fromFile(file, repoPath), view, parent, file);
 	}
 
 	override toClipboard(): string {
@@ -35,17 +37,13 @@ export class UncommittedFileNode extends ViewFileNode<ViewsWithCommits> implemen
 		// Use the file icon and decorations
 		item.resourceUri = this.view.container.git.getAbsoluteUri(this.file.path, this.repoPath);
 
-		const icon = GitFile.getStatusIcon(this.file.status);
+		const icon = getGitFileStatusIcon(this.file.status);
 		item.iconPath = {
 			dark: this.view.container.context.asAbsolutePath(joinPaths('images', 'dark', icon)),
 			light: this.view.container.context.asAbsolutePath(joinPaths('images', 'light', icon)),
 		};
 
-		item.tooltip = StatusFileFormatter.fromTemplate(
-			`\${file}\n\${directory}/\n\n\${status}\${ (originalPath)}`,
-			this.file,
-		);
-
+		item.tooltip = getFileTooltipMarkdown(this.file);
 		item.command = this.getCommand();
 
 		// Only cache the label/description for a single refresh
@@ -56,7 +54,7 @@ export class UncommittedFileNode extends ViewFileNode<ViewsWithCommits> implemen
 	}
 
 	private _description: string | undefined;
-	get description() {
+	get description(): string {
 		if (this._description == null) {
 			this._description = StatusFileFormatter.fromTemplate(
 				this.view.config.formats.files.description,
@@ -68,7 +66,7 @@ export class UncommittedFileNode extends ViewFileNode<ViewsWithCommits> implemen
 	}
 
 	private _folderName: string | undefined;
-	get folderName() {
+	get folderName(): string {
 		if (this._folderName == null) {
 			this._folderName = dirname(this.uri.relativePath);
 		}
@@ -76,7 +74,7 @@ export class UncommittedFileNode extends ViewFileNode<ViewsWithCommits> implemen
 	}
 
 	private _label: string | undefined;
-	get label() {
+	get label(): string {
 		if (this._label == null) {
 			this._label = StatusFileFormatter.fromTemplate(
 				`\${file}`,
@@ -112,7 +110,7 @@ export class UncommittedFileNode extends ViewFileNode<ViewsWithCommits> implemen
 		};
 		return {
 			title: 'Open Changes with Previous Revision',
-			command: Commands.DiffWithPrevious,
+			command: GlCommand.DiffWithPrevious,
 			arguments: [undefined, commandArgs],
 		};
 	}
